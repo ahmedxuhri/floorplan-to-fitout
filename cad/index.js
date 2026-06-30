@@ -2778,87 +2778,111 @@ async function runBlindAIRender() {
   if (blindRenderBtn) blindRenderBtn.disabled = true;
   blenderRenderBtn.disabled = true;
 
-  const stages = [
-    { text: 'Stage 1: AI visioning 2D plan...', pct: 15 },
-    { text: 'Stage 2: Verifying and refining layout description with 3D view...', pct: 50 },
-    { text: 'Stage 3: Generating image blindly without visual reference...', pct: 80 },
-    { text: 'Finishing up...', pct: 95 }
-  ];
-  let stageIdx = 0;
-  function nextStage() {
-    if (stageIdx < stages.length) {
-      renderLoadingText.textContent = stages[stageIdx].text;
-      renderProgressFill.style.width = stages[stageIdx].pct + '%';
-      stageIdx++;
-    }
-  }
-  nextStage();
-  const stageTimer = setInterval(nextStage, 5000);
-
   const cam = cameraPositions.find(c => c.id === selectedCamera) || cameraPositions[0];
+  const designBrief = cadDesignBrief ? cadDesignBrief.value.trim() : '';
 
   try {
-    const payload = {
-      chatImage: screenshot2d,
-      screenshot3d: screenshot3d,
-      floorplan: { corners, walls },
-      objects: identifiedObjects.map((obj, i) => ({
-        number: i + 1,
-        type: obj.label || obj.typeGuess || 'generic',
-        x: obj.x,
-        y: obj.y,
-        w: obj.w || 60,
-        h: obj.h || 60,
-        rotation: obj.rotation || 0,
-        shape: obj.shape || 'rectangle'
-      })),
-      camera: cam ? {
-        x: cam.x,
-        y: cam.y,
-        angle: cam.angle - 180,
-        fov: cam.fov || 60,
-        is3d: !!cam.is3d,
-        px: cam.px,
-        py: cam.py,
-        pz: cam.pz,
-        dx: cam.dx,
-        dy: cam.dy,
-        dz: cam.dz
-      } : null,
-      designBrief: cadDesignBrief ? cadDesignBrief.value.trim() : '',
-      sessionId: sessionId
-    };
-
-    const res = await fetch('/api/cad/blind-render', {
+    // ─── Stage 1 Request ───
+    renderProgressFill.style.width = '15%';
+    renderLoadingText.textContent = 'Stage 1: AI visioning 2D plan...';
+    
+    const stage1Res = await fetch('/api/cad/blind-render/stage1', {
       method: 'POST',
       headers: getApiHeaders(true),
-      body: JSON.stringify(payload)
+      body: JSON.stringify({
+        chatImage: screenshot2d,
+        floorplan: { corners, walls },
+        objects: identifiedObjects.map((obj, i) => ({
+          number: i + 1,
+          type: obj.label || obj.typeGuess || 'generic',
+          x: obj.x,
+          y: obj.y,
+          w: obj.w || 60,
+          h: obj.h || 60,
+          rotation: obj.rotation || 0,
+          shape: obj.shape || 'rectangle'
+        })),
+        camera: cam ? {
+          x: cam.x,
+          y: cam.y,
+          angle: cam.angle - 180,
+          fov: cam.fov || 60,
+          is3d: !!cam.is3d,
+          px: cam.px,
+          py: cam.py,
+          pz: cam.pz,
+          dx: cam.dx,
+          dy: cam.dy,
+          dz: cam.dz
+        } : null,
+        designBrief: designBrief,
+        sessionId: sessionId
+      })
     });
 
-    if (!res.ok) {
-      const errData = await res.json();
-      throw new Error(`Blind render failed: ${errData.error || res.statusText}`);
+    if (!stage1Res.ok) {
+      const errData = await stage1Res.json();
+      throw new Error(`Stage 1 failed: ${errData.error || stage1Res.statusText}`);
     }
+    const { stage1Json } = await stage1Res.json();
 
-    const result = await res.json();
-    clearInterval(stageTimer);
+    // ─── Stage 2 Request ───
+    renderProgressFill.style.width = '50%';
+    renderLoadingText.textContent = 'Stage 2: Verifying and refining layout description with 3D view...';
+
+    const stage2Res = await fetch('/api/cad/blind-render/stage2', {
+      method: 'POST',
+      headers: getApiHeaders(true),
+      body: JSON.stringify({
+        screenshot3d: screenshot3d,
+        stage1Json,
+        designBrief,
+        sessionId
+      })
+    });
+
+    if (!stage2Res.ok) {
+      const errData = await stage2Res.json();
+      throw new Error(`Stage 2 failed: ${errData.error || stage2Res.statusText}`);
+    }
+    const { stage2Json } = await stage2Res.json();
+
+    // ─── Stage 3 Request ───
+    renderProgressFill.style.width = '80%';
+    renderLoadingText.textContent = 'Stage 3: Generating image blindly without any visual reference...';
+
+    const stage3Res = await fetch('/api/cad/blind-render/stage3', {
+      method: 'POST',
+      headers: getApiHeaders(true),
+      body: JSON.stringify({
+        stage2Json,
+        sessionId
+      })
+    });
+
+    if (!stage3Res.ok) {
+      const errData = await stage3Res.json();
+      throw new Error(`Stage 3 failed: ${errData.error || stage3Res.statusText}`);
+    }
+    const { imageUrl } = await stage3Res.json();
+
     renderProgressFill.style.width = '100%';
     renderLoadingText.textContent  = 'Done!';
     await new Promise(r => setTimeout(r, 500));
 
-    if (result.imageUrl) {
-      aiRenderImg.src = result.imageUrl;
+    if (imageUrl) {
+      aiRenderImg.src = imageUrl;
       aiRenderImg.style.display = 'block';
       aiRenderPlaceholder.style.display = 'none';
-      lastAIRender = result.imageUrl;
+      lastAIRender = imageUrl;
       regenerateBtn.style.display = '';
 
       addChatMessage('system', '🤖 Blind AI Render Complete!');
-      if (result.firstJson) {
-        addChatMessage('model', `Stage 1 Plan Description:\n${JSON.stringify(result.firstJson, null, 2)}`);
+      if (stage1Json) {
+        addChatMessage('model', `Stage 1 Plan Description:\n${JSON.stringify(stage1Json, null, 2)}`);
       }
-      if (result.secondJson) {
-        addChatMessage('model', `Stage 2 Corrections & Prompt:\nCorrections: ${result.secondJson.correctionsMade}\nPrompt: ${result.secondJson.imagenPrompt}`);
+      if (stage2Json) {
+        addChatMessage('model', `Stage 2 Corrections & Prompt:\nCorrections: ${stage2Json.correctionsMade}\nPrompt: ${stage2Json.imagenPrompt}`);
       }
     } else {
       aiRenderPlaceholder.style.display = '';
@@ -2866,7 +2890,6 @@ async function runBlindAIRender() {
     }
 
   } catch (error) {
-    clearInterval(stageTimer);
     alert(`Blind Render failed: ${error.message}`);
     aiRenderPlaceholder.style.display = '';
   } finally {

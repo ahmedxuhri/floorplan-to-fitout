@@ -1378,33 +1378,20 @@ print("[blender_scene] Done.")
 });
 
 // Blind AI Render (Text-Only) pipeline route
-app.post('/blind-render', async (req, res) => {
+// Blind AI Render (Text-Only) Stage 1 route
+app.post('/blind-render/stage1', async (req, res) => {
   let chatImageTempPath = null;
-  let screenshot3DTempPath = null;
   try {
-    const { chatImage, screenshot3d, floorplan, objects, camera, designBrief, sessionId } = req.body;
-    
-    if (chatImage) {
-      const base64Data = chatImage.split(',')[1] || chatImage;
-      const buffer = Buffer.from(base64Data, 'base64');
-      chatImageTempPath = await saveBufferToTempFile(buffer, 'chat_2dplan', 'image/png');
-      await resizeImageWithPython(chatImageTempPath);
+    const { chatImage, floorplan, objects, camera, designBrief, sessionId } = req.body;
+    if (!chatImage) {
+      return res.status(400).json({ error: 'Missing chatImage' });
     }
+    const base64Data = chatImage.split(',')[1] || chatImage;
+    const buffer = Buffer.from(base64Data, 'base64');
+    chatImageTempPath = await saveBufferToTempFile(buffer, 'chat_2dplan', 'image/png');
+    await resizeImageWithPython(chatImageTempPath);
 
-    if (screenshot3d) {
-      const base64Data = screenshot3d.split(',')[1] || screenshot3d;
-      const buffer = Buffer.from(base64Data, 'base64');
-      screenshot3DTempPath = await saveBufferToTempFile(buffer, 'screenshot_threejs', 'image/png');
-      await resizeImageWithPython(screenshot3DTempPath);
-    }
-
-    const conversationId = null; // Use fresh context to avoid history timeout
     const tempDir = path.join(__dirname, 'temp_uploads');
-
-    // ─── Stage 1: Vision 2D plan ───
-    if (sessionId) {
-      sessionLog(sessionId, 'system', '🔍 Stage 1: AI visioning 2D plan...');
-    }
     
     const stage1Prompt = `
 Analyze the 2D floor plan blueprint image located at the absolute path: ${chatImageTempPath}
@@ -1412,6 +1399,8 @@ The camera position and orientation are described here:
 Camera: ${JSON.stringify(camera || {})}
 Floorplan geometry: ${JSON.stringify(floorplan || {})}
 Identified objects in space: ${JSON.stringify(objects || [])}
+
+${designBrief ? `Use this design brief/context to understand the nature, usability, functionality, and type of the space (e.g. restaurant, commercial dining, residential apartment) and guide your spatial identification:\n"${designBrief}"\n` : ''}
 
 Generate a description of the space layout from the camera's perspective.
 Identify exactly which walls, doors, windows, and furniture items are in the camera's line of sight (field of view).
@@ -1436,25 +1425,46 @@ CRITICAL RULES FOR EFFICIENCY:
 2. Use your native vision capability directly to inspect the image, perform all measurements/calculations internally, and output the final JSON in your first reply step.
 3. Print the raw JSON object directly. Do NOT explain your steps or print anything else beside the JSON.
 `;
-    
-    const stage1Result = await runAgyCommand(stage1Prompt, { sessionId, conversationId, logPrefix: 'blind-s1' });
-    if (checkForQuotaError(stage1Result.stdout, stage1Result.stderr, conversationId)) {
+
+    const stage1Result = await runAgyCommand(stage1Prompt, { sessionId, logPrefix: 'blind-s1' });
+    if (checkForQuotaError(stage1Result.stdout, stage1Result.stderr)) {
       return res.status(429).json({ error: 'AI quota or rate limit reached. Please wait a few minutes and try again.', isQuotaError: true });
     }
     if (stage1Result.code !== 0) {
       throw new Error(`agy CLI exited with code ${stage1Result.code} at Stage 1. Stderr: ${stage1Result.stderr}`);
     }
-    
+
     const stage1Json = extractJSON(stage1Result.stdout, tempDir);
     if (!stage1Json) {
       console.error(`[blind-s1] Failed to extract JSON from stdout:`, stage1Result.stdout);
       throw new Error('Failed to extract JSON in Stage 1.');
     }
 
-    // ─── Stage 2: Vision 3D viewport + Stage 1 JSON ───
-    if (sessionId) {
-      sessionLog(sessionId, 'system', '⚖️ Stage 2: Verifying and refining layout description with 3D view...');
+    res.json({ stage1Json });
+  } catch (error) {
+    console.error("Error in blind-render Stage 1:", error);
+    res.status(500).json({ error: error.message || "Internal server error." });
+  } finally {
+    if (chatImageTempPath && fs.existsSync(chatImageTempPath)) {
+      try { fs.unlinkSync(chatImageTempPath); } catch (e) {}
     }
+  }
+});
+
+// Blind AI Render (Text-Only) Stage 2 route
+app.post('/blind-render/stage2', async (req, res) => {
+  let screenshot3DTempPath = null;
+  try {
+    const { screenshot3d, stage1Json, designBrief, sessionId } = req.body;
+    if (!screenshot3d) {
+      return res.status(400).json({ error: 'Missing screenshot3d' });
+    }
+    const base64Data = screenshot3d.split(',')[1] || screenshot3d;
+    const buffer = Buffer.from(base64Data, 'base64');
+    screenshot3DTempPath = await saveBufferToTempFile(buffer, 'screenshot_threejs', 'image/png');
+    await resizeImageWithPython(screenshot3DTempPath);
+
+    const tempDir = path.join(__dirname, 'temp_uploads');
 
     const stage2Prompt = `
 Compare the 3D interactive viewport screenshot located at the absolute path: ${screenshot3DTempPath}
@@ -1467,6 +1477,11 @@ Your task is to verify and refine this description. Ensure that:
 3. If a doorway leads into a Bathroom (check the 2D floor plan labels and room names), ensure that the refined description and the final prompt specify that the view through this doorway reveals a clean bathroom interior (e.g. styled tiles, a vanity mirror, a sink, or neutral bathroom details) and does NOT contain a bed or bedroom furniture in that space.
 4. ENCLOSED INTERIOR ONLY: The final prompt MUST describe a fully enclosed interior space. Do NOT generate isometric views, cutaway models, floating boxes, or grid-like flooring. The view must be from a camera positioned inside the space, with the floor, walls, and ceiling fully bounding the frame as a realistic indoor room (e.g., "a photorealistic wide-angle interior photograph...").
 5. Generate a final detailed prompt for a text-to-image generator (like Imagen) to draw this scene. The prompt must be hyper-detailed, describing materials, lighting, style, and layout, but strictly locking the structure (e.g. 'a photorealistic interior shot of a room with exactly two doors on the same white wall, a counter on the left...').
+6. PLACE TYPE & FUNCTIONAL INTEGRITY: Make the generated image prompt highly aware of the type, purpose, usability, and functionality of the space (e.g. commercial restaurant/bar/cafe vs. residential room/kitchen) from the design brief or object layouts:
+   - If it is a restaurant or commercial dining space:
+     - The roofing/ceiling must fit the restaurant nature. Specify a commercial-style ceiling, such as "a modern commercial ceiling with exposed painted ductwork, matte black industrial piping, acoustic panels, and minimalist black track lighting" or "a clean contemporary tray ceiling with recessed architectural spotlights and warm wood paneled accents". Do NOT describe a cozy residential drywall ceiling.
+     - The chairs/seating must match commercial usability. Specify commercial-grade seating suitable for a public dining space, such as "sturdy low-back restaurant bar stools with footrests made of black steel and dark oak wood at the counter" or "sleek modern cafe dining chairs that align correctly with the counter and table height". Do NOT place domestic/cozy residential armchairs, desk chairs, or basic stools.
+     - The tables, countertops, and floor materials must match a high-durability public space (e.g. polished concrete, industrial hardwood planks, luxury terrazzo).
 
 ${designBrief ? `Apply the style, materials and mood specified in this design brief:\n"${designBrief}"\n` : ''}
 
@@ -1483,7 +1498,7 @@ CRITICAL RULES FOR EFFICIENCY:
 3. Print the raw JSON object directly. Do NOT explain your steps or print anything else beside the JSON.
 `;
 
-    const stage2Result = await runAgyCommand(stage2Prompt, { sessionId, conversationId, logPrefix: 'blind-s2' });
+    const stage2Result = await runAgyCommand(stage2Prompt, { sessionId, logPrefix: 'blind-s2' });
     if (stage2Result.code !== 0) {
       throw new Error(`agy CLI exited with code ${stage2Result.code} at Stage 2. Stderr: ${stage2Result.stderr}`);
     }
@@ -1494,9 +1509,23 @@ CRITICAL RULES FOR EFFICIENCY:
       throw new Error('Failed to extract JSON in Stage 2.');
     }
 
-    // ─── Stage 3: Blind Imagen generation ───
-    if (sessionId) {
-      sessionLog(sessionId, 'system', '🎨 Stage 3: Generating image blindly without any visual reference...');
+    res.json({ stage2Json });
+  } catch (error) {
+    console.error("Error in blind-render Stage 2:", error);
+    res.status(500).json({ error: error.message || "Internal server error." });
+  } finally {
+    if (screenshot3DTempPath && fs.existsSync(screenshot3DTempPath)) {
+      try { fs.unlinkSync(screenshot3DTempPath); } catch (e) {}
+    }
+  }
+});
+
+// Blind AI Render (Text-Only) Stage 3 route
+app.post('/blind-render/stage3', async (req, res) => {
+  try {
+    const { stage2Json, sessionId } = req.body;
+    if (!stage2Json || !stage2Json.imagenPrompt) {
+      return res.status(400).json({ error: 'Missing stage2Json or imagenPrompt' });
     }
 
     const stage3Prompt = `Generate a photorealistic 3D render using the generate_image tool.
@@ -1504,7 +1533,7 @@ Use this text prompt: "${stage2Json.imagenPrompt}".
 Do NOT pass any reference image paths in the ImagePaths parameter. The image must be generated blindly based ONLY on the text prompt.
 Return ONLY the markdown link to the generated image file, do not include any other text.`;
 
-    const stage3Result = await runAgyCommand(stage3Prompt, { sessionId, conversationId, logPrefix: 'blind-s3' });
+    const stage3Result = await runAgyCommand(stage3Prompt, { sessionId, logPrefix: 'blind-s3' });
     const match = stage3Result.stdout.match(/(?:file:\/\/|file:)?(\/[^\s\)]+)/);
     let imageUrl = null;
     if (match) {
@@ -1520,23 +1549,10 @@ Return ONLY the markdown link to the generated image file, do not include any ot
       throw new Error("Failed to generate image.");
     }
 
-    res.json({
-      imageUrl,
-      firstJson: stage1Json,
-      secondJson: stage2Json,
-      reply: "Blind AI render completed successfully!"
-    });
-
+    res.json({ imageUrl });
   } catch (error) {
-    console.error("Error in blind-render request:", error);
+    console.error("Error in blind-render Stage 3:", error);
     res.status(500).json({ error: error.message || "Internal server error." });
-  } finally {
-    if (chatImageTempPath && fs.existsSync(chatImageTempPath)) {
-      try { fs.unlinkSync(chatImageTempPath); } catch (e) {}
-    }
-    if (screenshot3DTempPath && fs.existsSync(screenshot3DTempPath)) {
-      try { fs.unlinkSync(screenshot3DTempPath); } catch (e) {}
-    }
   }
 });
 
