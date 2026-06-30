@@ -1,0 +1,568 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>ArchVision AI — Floor Plan to 3D Render</title>
+  <meta name="description" content="Upload a floor plan, trace walls with AI, identify furniture, position a camera, and generate photorealistic renders via Blender and Google Imagen.">
+  <!-- Google Fonts: Inter -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+  <!-- Lucide Icons -->
+  <script src="https://unpkg.com/lucide@latest"></script>
+  <!-- CSS Stylesheet -->
+  <link rel="stylesheet" href="index.css">
+  
+  <!-- Import maps polyfill -->
+  <script async src="https://unpkg.com/es-module-shims@1.6.3/dist/es-module-shims.js"></script>
+
+  <!-- Three.js ESM mapping -->
+  <script type="importmap">
+    {
+      "imports": {
+        "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+        "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+      }
+    }
+  </script>
+</head>
+<body>
+  <div class="app-container">
+    <!-- Top Navigation Bar -->
+    <header class="app-header">
+      <div class="header-logo">
+        <i data-lucide="layers" class="logo-icon"></i>
+        <h1>ArchVision <span class="badge">AI Pipeline</span></h1>
+      </div>
+      <div class="header-status">
+        <span class="status-indicator online"></span>
+        <span id="api-status">API Connected</span>
+        <button id="save-session-btn" class="btn btn-mini btn-secondary" style="margin-left: 8px; font-size: 11px; padding: 3px 10px;" title="Save current session" disabled>
+          💾 Save Session
+        </button>
+        <button id="load-session-btn" class="btn btn-mini btn-secondary" style="margin-left: 6px; font-size: 11px; padding: 3px 10px;" title="Load saved session">
+          📂 Load Session
+        </button>
+        <button id="wipe-session-btn" class="btn btn-mini" style="background: rgba(239,68,68,0.15); border: 1px solid rgba(239,68,68,0.3); color: #f87171; margin-left: 6px; font-size: 11px; padding: 3px 10px;" title="Wipe session history" disabled>
+          🗑️ Wipe Session
+        </button>
+      </div>
+    </header>
+
+    <div class="main-content">
+      <!-- Sidebar Panel -->
+      <aside class="sidebar">
+
+        <!-- Mode Selector -->
+        <section class="sidebar-section" id="mode-selector-section">
+          <h2><i data-lucide="sliders"></i> Pipeline Mode</h2>
+          <div class="mode-selector">
+            <button id="mode-cad-btn" class="mode-btn active">
+              <i data-lucide="layers"></i> 3D CAD
+            </button>
+            <button id="mode-photo-btn" class="mode-btn">
+              <i data-lucide="camera"></i> Direct Photo
+            </button>
+          </div>
+        </section>
+
+        <!-- Floor Plan Template (CAD Upload) -->
+        <section class="sidebar-section" id="cad-upload-section">
+          <h2><i data-lucide="upload-cloud"></i> Floor Plan Template</h2>
+          <div class="upload-area" id="drop-zone">
+            <input type="file" id="file-input" accept="image/*" style="display: none;">
+            <i data-lucide="image" class="upload-icon"></i>
+            <p>Drag &amp; drop blueprint or <span>click to browse</span></p>
+          </div>
+          <div id="file-info" class="file-info-box" style="display: none;">
+            <span id="file-name">blueprint.jpg</span>
+            <button id="remove-file-btn"><i data-lucide="x"></i></button>
+          </div>
+        </section>
+
+        <!-- Direct Photo Upload Section -->
+        <section class="sidebar-section" id="photo-upload-section" style="display: none;">
+          <h2><i data-lucide="image"></i> Space Photograph</h2>
+          <div class="upload-area" id="photo-drop-zone">
+            <input type="file" id="photo-file-input" accept="image/*" style="display: none;">
+            <i data-lucide="camera" class="upload-icon"></i>
+            <p>Drag &amp; drop space photo or <span>click to browse</span></p>
+          </div>
+          <div id="photo-file-info" class="file-info-box" style="display: none;">
+            <span id="photo-file-name">photo.jpg</span>
+            <button id="remove-photo-btn"><i data-lucide="x"></i></button>
+          </div>
+        </section>
+
+        <!-- Markup & Shading Panel (Direct Photo Mode) -->
+        <section class="sidebar-section" id="markup-tools-section" style="display: none;">
+          <h2><i data-lucide="palette"></i> Markup &amp; Shading</h2>
+          
+          <div class="markup-mode-buttons">
+            <button id="markup-brush-free" class="markup-tool-btn active" title="Freehand drawing"><i data-lucide="pencil"></i> Free</button>
+            <button id="markup-brush-dashed" class="markup-tool-btn" title="Dashed line"><i data-lucide="minus"></i> Dashed</button>
+            <button id="markup-brush-circle" class="markup-tool-btn" title="Draw circle"><i data-lucide="circle"></i> Circle</button>
+            <button id="markup-brush-shade" class="markup-tool-btn" title="Shade area"><i data-lucide="paint-bucket"></i> Shade</button>
+          </div>
+
+          <div class="input-group">
+            <label>Markup Color</label>
+            <div class="markup-colors">
+              <span class="color-dot-btn red active" data-color="#ef4444" style="background:#ef4444"></span>
+              <span class="color-dot-btn green" data-color="#10b981" style="background:#10b981"></span>
+              <span class="color-dot-btn blue" data-color="#3b82f6" style="background:#3b82f6"></span>
+              <span class="color-dot-btn yellow" data-color="#f59e0b" style="background:#f59e0b"></span>
+            </div>
+          </div>
+
+          <div class="input-group">
+            <label for="brush-size">Brush Size</label>
+            <input type="range" id="brush-size" min="2" max="40" value="8" style="accent-color: hsl(var(--color-primary)); width: 100%;">
+          </div>
+
+          <div class="markup-action-buttons">
+            <button id="markup-undo" class="btn btn-secondary btn-mini"><i data-lucide="undo-2"></i> Undo</button>
+            <button id="markup-clear" class="btn btn-danger btn-mini"><i data-lucide="trash-2"></i> Clear</button>
+          </div>
+        </section>
+
+        <!-- Direct Photo Pipeline Generation -->
+        <section class="sidebar-section" id="photo-pipeline-section" style="display: none;">
+          <h2><i data-lucide="sparkles"></i> Direct Design</h2>
+          <div class="input-group" id="initial-prompt-group" style="margin-bottom: 8px;">
+            <label for="initial-prompt-input" style="font-size: 11px; color: #94a3b8;">Design Style / Theme Prompt</label>
+            <textarea id="initial-prompt-input" rows="3" placeholder="Describe the style, colors, mood... (e.g. Modern bakery with warm wood accents, cozy lighting, and white countertops)" style="background-color: rgba(255, 255, 255, 0.02); border: 1px solid rgba(255, 255, 255, 0.08); border-radius: var(--radius-md); padding: 8px 12px; color: white; font-size: 12px; resize: none; outline: none; width: 100%; font-family: inherit; transition: var(--transition-smooth); margin-top: 4px;"></textarea>
+          </div>
+          <button id="photo-generate-btn" class="btn btn-primary" disabled>
+            <i data-lucide="wand-2"></i>
+            <span>Generate Design</span>
+          </button>
+        </section>
+
+        <!-- AI Pipeline Steps Section (CAD) -->
+        <section class="sidebar-section" id="cad-pipeline-section">
+          <h2><i data-lucide="sparkles"></i> AI Pipeline</h2>
+          <div class="pipeline-steps">
+            <button id="ai-btn" class="btn btn-primary pipeline-step" disabled>
+              <i data-lucide="wand-2"></i>
+              <span>Step 1 — Trace Walls</span>
+            </button>
+            <div class="skip-trace-container" style="margin: -2px 0 6px 4px; display: flex; align-items: center; gap: 8px;">
+              <input type="checkbox" id="skip-trace-checkbox" style="width: 14px; height: 14px; cursor: pointer; accent-color: hsl(var(--color-primary));">
+              <label for="skip-trace-checkbox" style="font-size: 11px; color: #94a3b8; cursor: pointer; user-select: none;">
+                Skip AI Trace (drawn manually)
+              </label>
+            </div>
+            <button id="identify-btn" class="btn btn-secondary pipeline-step" disabled>
+              <i data-lucide="scan-search"></i>
+              <span>Step 2 — Identify Objects</span>
+            </button>
+            <button id="ai-blender-preview-btn" class="btn btn-secondary pipeline-step" disabled>
+              <i data-lucide="layout"></i>
+              <span>Step 2.5 — Generate 3D Preview</span>
+            </button>
+            <button id="set-camera-btn" class="btn btn-secondary pipeline-step" disabled>
+              <i data-lucide="camera"></i>
+              <span>Step 3 — Set Camera</span>
+            </button>
+
+            <!-- Design Brief -->
+            <div class="input-group" id="cad-design-brief-group" style="margin-top: 4px;">
+              <label style="font-size: 11px; color: #94a3b8; display:flex; align-items:center; gap:5px;">
+                <i data-lucide="file-text" style="width:12px;height:12px;"></i>
+                Design Brief (optional)
+              </label>
+              <textarea id="cad-design-brief" class="design-brief-textarea" rows="3"
+                placeholder="Describe the space style, mood, materials... e.g. Modern Arabic restaurant with warm amber lighting, dark wood panels, and ornate geometric screens"></textarea>
+            </div>
+
+            <button id="blender-render-btn" class="btn btn-accent pipeline-step" disabled>
+              <i data-lucide="aperture"></i>
+              <span>Step 4 — Render Scene</span>
+            </button>
+            <button id="blind-render-btn" class="btn btn-secondary pipeline-step" style="margin-top: 10px; border: 1px dashed rgba(255,255,255,0.15); background: rgba(255,255,255,0.03);" disabled>
+              <i data-lucide="eye-off"></i>
+              <span>Blind AI Render (Text-Only)</span>
+            </button>
+          </div>
+          <!-- Pipeline progress status -->
+          <div id="pipeline-status" class="pipeline-status" style="display:none;">
+            <div class="pipeline-status-dot"></div>
+            <span id="pipeline-status-text">Processing...</span>
+          </div>
+        </section>
+
+
+        <!-- Editor Tools Section (CAD) -->
+        <section class="sidebar-section" id="cad-editor-tools-section">
+          <h2><i data-lucide="mouse-pointer"></i> Drawing Tools</h2>
+          <div class="tools-grid">
+            <button id="tool-select" class="tool-btn active" title="Select & move corners">
+              <i data-lucide="move"></i> Select
+            </button>
+            <button id="tool-draw" class="tool-btn" title="Click to draw walls">
+              <i data-lucide="pen-tool"></i> Draw Wall
+            </button>
+            <button id="tool-delete" class="tool-btn" title="Delete selected elements">
+              <i data-lucide="trash-2"></i> Delete
+            </button>
+            <button id="tool-camera" class="tool-btn" title="Click to place camera viewpoint">
+              <i data-lucide="crosshair"></i> Camera Pin
+            </button>
+          </div>
+        </section>
+
+        <!-- Scale & Dimensions Section (CAD) -->
+        <section class="sidebar-section" id="cad-dimensions-section">
+          <h2><i data-lucide="ruler"></i> Dimensions (Scale)</h2>
+          <div class="input-group">
+            <label for="width-input">Layout Width (m)</label>
+            <input type="number" id="width-input" value="4.80" step="0.1" min="1">
+          </div>
+          <div class="input-group">
+            <label for="height-input">Layout Height (m)</label>
+            <input type="number" id="height-input" value="11.60" step="0.1" min="1">
+          </div>
+          <button id="scale-apply-btn" class="btn btn-secondary">Apply Calibration</button>
+        </section>
+
+        <!-- Display settings Section (CAD) -->
+        <section class="sidebar-section" id="cad-customizer-section">
+          <h2><i data-lucide="settings"></i> 3D Customizer</h2>
+          <div class="input-group">
+            <label for="wall-height">Wall Height (cm)</label>
+            <input type="number" id="wall-height" value="250" step="10" min="100">
+          </div>
+          <div class="input-group">
+            <label for="wall-thickness">Wall Thickness (cm)</label>
+            <input type="number" id="wall-thickness" value="15" step="5" min="5">
+          </div>
+          <div class="input-group">
+            <label for="wall-color">Wall Color</label>
+            <div class="color-picker-wrapper">
+              <input type="color" id="wall-color" value="#e2e8f0">
+              <span id="color-hex">#e2e8f0</span>
+            </div>
+          </div>
+        </section>
+
+        <!-- Camera Positions Section -->
+        <section class="sidebar-section" id="camera-positions-section" style="display:none;">
+          <h2><i data-lucide="camera"></i> Camera Positions</h2>
+          <div id="camera-list" class="camera-list">
+            <p class="empty-hint">Click "Camera Pin" tool then click on the 2D plan to place a camera.</p>
+          </div>
+          <button id="capture-3d-cam-btn" class="btn btn-outline" style="margin-top: 10px; width: 100%; display: flex; align-items: center; justify-content: center; gap: 6px;">
+            <i data-lucide="camera"></i> Capture Viewport Camera
+          </button>
+        </section>
+
+        <!-- File operations Section -->
+        <section class="sidebar-section file-operations" id="cad-file-ops-section">
+          <button id="export-btn" class="btn btn-outline"><i data-lucide="download"></i> Export JSON</button>
+          <button id="import-btn-trigger" class="btn btn-outline"><i data-lucide="file-json"></i> Import JSON</button>
+          <input type="file" id="import-input" accept=".json" style="display: none;">
+        </section>
+      </aside>
+
+      <!-- Viewports Area -->
+      <main class="viewports-container">
+        <!-- Viewport Controls Header -->
+        <div class="viewports-header">
+          <div class="layout-toggles">
+            <button id="view-split" class="layout-btn active" title="Split view"><i data-lucide="columns"></i> Split</button>
+            <button id="view-2d" class="layout-btn" title="2D Floorplan view"><i data-lucide="layout"></i> 2D Editor</button>
+            <button id="view-3d" class="layout-btn" title="3D perspective view"><i data-lucide="box"></i> 3D Preview</button>
+            <button id="view-objects" class="layout-btn" title="Object Library" disabled><i data-lucide="package"></i> Objects</button>
+            <button id="view-ai" class="layout-btn" title="AI Render & Chat"><i data-lucide="sparkles"></i> AI Render</button>
+          </div>
+          <div class="view-settings">
+            <button id="fps-btn" class="btn btn-mini" title="Enter First Person walk mode">
+              <i data-lucide="footprints"></i> Walk Mode
+            </button>
+          </div>
+        </div>
+
+        <div class="viewports-grid" id="viewports-grid">
+
+          <!-- 2D Canvas Container -->
+          <div class="viewport-card" id="card-2d">
+            <div class="viewport-label">2D Blueprint Tracing</div>
+            <div class="canvas-wrapper" id="editor-2d-container">
+              <canvas id="canvas-2d"></canvas>
+              <!-- Zoom & Pan Controls Overlay -->
+              <div class="canvas-controls" style="position: absolute; bottom: 12px; left: 12px; z-index: 5; display: flex; gap: 6px; background: rgba(15, 23, 42, 0.7); padding: 4px; border-radius: var(--radius-md); border: 1px solid rgba(255, 255, 255, 0.1); backdrop-filter: blur(8px);">
+                <button id="zoom-in-btn" class="btn btn-mini" title="Zoom In" style="padding: 4px 8px; width: 28px; height: 28px; display: flex; align-items: center; justify-content: center;"><i data-lucide="zoom-in" style="width: 14px; height: 14px;"></i></button>
+                <button id="zoom-out-btn" class="btn btn-mini" title="Zoom Out" style="padding: 4px 8px; width: 28px; height: 28px; display: flex; align-items: center; justify-content: center;"><i data-lucide="zoom-out" style="width: 14px; height: 14px;"></i></button>
+                <button id="zoom-fit-btn" class="btn btn-mini" title="Fit to screen" style="padding: 4px 8px; width: 48px; height: 28px; display: flex; align-items: center; justify-content: center; font-size: 11px; font-weight: 500;">Fit</button>
+              </div>
+              <!-- AI Scanner animation overlay -->
+              <div class="scanner-overlay" id="scanner-overlay" style="display: none;">
+                <div class="scan-bar"></div>
+                <div class="scanner-text">AI Processing...</div>
+              </div>
+            </div>
+          </div>
+
+          <!-- 3D WebGL Container -->
+          <div class="viewport-card" id="card-3d">
+            <div class="viewport-label" style="display: flex; justify-content: space-between; align-items: center; width: calc(100% - 24px); pointer-events: auto;">
+              <span>3D Quick Preview</span>
+              <div class="preview-tabs" style="display: flex; gap: 8px; font-size: 11px; background: rgba(15, 23, 42, 0.6); padding: 2px; border-radius: 6px; border: 1px solid rgba(255, 255, 255, 0.1);">
+                <button id="tab-three" class="tab-btn active" style="background: hsl(var(--color-primary)); color: white; border: none; padding: 2px 8px; border-radius: 4px; cursor: pointer; font-size: 10px; font-weight: 600; transition: all 0.2s;">Interactive 3D</button>
+                <button id="tab-blender" class="tab-btn" style="background: transparent; color: #94a3b8; border: none; padding: 2px 8px; border-radius: 4px; cursor: pointer; font-size: 10px; font-weight: 600; transition: all 0.2s;">Blender 3D Preview</button>
+              </div>
+            </div>
+            <div class="canvas-wrapper" id="viewer-3d-container">
+              <!-- Three.js canvas will be inserted here -->
+            </div>
+            <!-- Blender static preview -->
+            <div class="canvas-wrapper" id="blender-preview-container" style="display: none; position: relative;">
+              <img id="blender-preview-img" style="width: 100%; height: 100%; object-fit: contain; display: block;" src="" alt="Blender 3D Preview">
+              <div id="blender-preview-placeholder" class="render-placeholder" style="position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; background: #0b0f19;">
+                <i data-lucide="layout" class="placeholder-icon"></i>
+                <p>No Blender preview generated yet. Run <strong>Step 2.5 — Generate 3D Preview</strong> in the sidebar.</p>
+              </div>
+            </div>
+            <!-- Walk controls instructions overlay -->
+            <div class="walk-instructions" id="walk-instructions" style="display: none;">
+              <p>Walk mode active. Use <strong>WASD / Arrow Keys</strong> to move, and <strong>Mouse</strong> to look around. Press <strong>ESC</strong> to exit.</p>
+            </div>
+          </div>
+
+          <!-- AI Render Viewport (full pipeline) -->
+          <div class="viewport-card" id="card-ai" style="display: none;">
+            <div class="viewport-label">AI Photorealistic Render</div>
+            <div class="canvas-wrapper ai-render-wrapper" id="ai-render-container">
+
+              <!-- Placeholder state -->
+              <div id="ai-render-placeholder" class="render-placeholder">
+                <i data-lucide="aperture" class="placeholder-icon"></i>
+                <p id="ai-render-placeholder-text">Complete Steps 1–3 in the sidebar, then click <strong>Step 4 — Render Scene</strong> to generate a photorealistic 3D render via Blender + Imagen.</p>
+              </div>
+
+              <!-- Rendered image -->
+              <img id="ai-render-img" class="render-image" src="" alt="Photorealistic Render" style="display:none;">
+
+              <!-- Annotation Drawing Canvas -->
+              <canvas id="annotation-canvas" style="position: absolute; display: none; cursor: crosshair; z-index: 4;"></canvas>
+
+              <!-- Loading overlay with progress stages -->
+              <div id="render-loading" class="render-loading-overlay" style="display:none;">
+                <div class="render-spinner"></div>
+                <p id="render-loading-text" class="render-loading-label">Building 3D scene...</p>
+                <div class="render-progress-bar">
+                  <div id="render-progress-fill" class="render-progress-fill" style="width:0%"></div>
+                </div>
+              </div>
+
+              <!-- Viewport action buttons (shown after render) -->
+              <div class="viewport-actions" style="position: absolute; bottom: 12px; right: 12px; z-index: 5; display: flex; gap: 8px;">
+                <button id="download-render-btn" class="btn btn-mini" style="display:none; background: rgba(15, 23, 42, 0.8); border: 1px solid rgba(255, 255, 255, 0.1); backdrop-filter: blur(8px); width: auto;">
+                  <i data-lucide="download"></i> Download
+                </button>
+                <button id="regenerate-btn" class="btn btn-mini regenerate-btn" style="display:none; width: auto; position: static; background: rgba(15, 23, 42, 0.8); border: 1px solid rgba(255, 255, 255, 0.1); backdrop-filter: blur(8px);">
+                  <i data-lucide="refresh-cw"></i> Regenerate
+                </button>
+              </div>
+            </div>
+          </div>
+
+          <!-- Object Library Panel (shown as overlay on 2D when identifying) -->
+          <div class="viewport-card" id="card-objects" style="display: none;">
+            <div class="panel-header-bar" style="display: flex; justify-content: space-between; align-items: center; padding: 12px 14px; background: rgba(15, 23, 42, 0.5); border-bottom: 1px solid rgba(255, 255, 255, 0.08); flex-shrink: 0;">
+              <span style="font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.8px; color: #94a3b8;">Object Library</span>
+              <div style="display: flex; gap: 8px;">
+                <button id="add-object-btn" class="btn btn-mini" style="background: rgba(59, 130, 246, 0.2); border: 1px solid rgba(59, 130, 246, 0.4); color: #60a5fa; display: flex; align-items: center; gap: 4px; padding: 4px 10px; font-size: 11px;">
+                  <i data-lucide="plus" style="width:12px; height:12px;"></i> Add Object
+                </button>
+                <button id="confirm-objects-btn" class="btn btn-mini" style="display: flex; align-items: center; gap: 4px; padding: 4px 10px; font-size: 11px;">
+                  <i data-lucide="check" style="width:12px; height:12px;"></i> Confirm All
+                </button>
+              </div>
+            </div>
+            <div class="object-library" id="object-library">
+              <p class="empty-hint">Run "Step 2 — Identify Objects" to populate this panel.</p>
+            </div>
+          </div>
+
+          <!-- AI Chat Assistant Viewport -->
+          <div class="viewport-card" id="card-chat" style="display: none;">
+            <div class="viewport-label">
+              AI Design Assistant
+              <span class="chat-session-badge" id="chat-session-badge" style="display:none;">
+                <span style="width:6px;height:6px;border-radius:50%;background:#22c55e;display:inline-block;"></span>
+                <span id="chat-session-id-label">connected</span>
+              </span>
+            </div>
+            <div class="chat-container">
+              <div id="chat-messages" class="chat-messages">
+                <div class="chat-message model">
+                  <p>Hello! I'm your AI Design Assistant. After generating a render, chat with me to refine it — change materials, lighting style, add decorations, or adjust the mood.</p>
+                </div>
+              </div>
+
+              <!-- Quick-action chips -->
+              <div class="chat-quick-chips" id="chat-quick-chips">
+                <button class="chat-chip" data-prompt="Add warm ambient lighting with soft pendant lights">💡 Warm Lighting</button>
+                <button class="chat-chip" data-prompt="Change the floor to polished dark wood parquet">🪵 Dark Wood Floor</button>
+                <button class="chat-chip" data-prompt="Add elegant indoor plants and greenery">🌿 Add Plants</button>
+                <button class="chat-chip" data-prompt="Make the walls textured with exposed brick or stone">🧱 Textured Walls</button>
+                <button class="chat-chip" data-prompt="Add dramatic ceiling details with coffer panels or beams">✨ Ceiling Detail</button>
+                <button class="chat-chip" data-prompt="Change the color palette to warm earth tones">🎨 Earth Tones</button>
+              </div>
+
+              <!-- Chat reference image attachment preview -->
+              <div id="chat-attachment-preview" class="chat-attachment-preview">
+                <img id="chat-preview-thumbnail" src="" style="width: 28px; height: 28px; border-radius: 4px; object-fit: cover; border: 1px solid rgba(255, 255, 255, 0.2);">
+                <span id="chat-preview-filename" style="font-size: 11px; color: #94a3b8; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 150px;">filename.png</span>
+                <button id="chat-remove-attachment" style="background: none; border: none; color: #ef4444; cursor: pointer; font-size: 14px; margin-left: auto; display: flex; align-items: center; justify-content: center; width: 20px; height: 20px;"><i data-lucide="x" style="width:14px;height:14px;"></i></button>
+              </div>
+
+              <div class="chat-input-bar">
+                <input type="file" id="chat-image-input" accept="image/*" style="display: none;">
+                <button id="chat-attach-btn" class="chat-attach-btn" title="Attach reference image">
+                  <i data-lucide="image-plus" style="width:16px;height:16px;"></i>
+                </button>
+                <input type="text" id="chat-input" placeholder="e.g. Add warm pendant lights above the tables...">
+                <button id="chat-send-btn"><i data-lucide="send" style="width:16px;height:16px;"></i></button>
+              </div>
+            </div>
+          </div>
+
+        </div>
+      </main>
+    </div>
+  </div>
+
+  <!-- Saved Sessions Modal -->
+  <div id="sessions-modal" class="modal-overlay" style="display: none;">
+    <div class="modal-card">
+      <div class="modal-header">
+        <h3>📂 Saved Sessions</h3>
+        <button id="close-modal-btn" class="close-btn">&times;</button>
+      </div>
+      <div class="modal-body">
+        <div id="sessions-list" class="sessions-list">
+          <p class="empty-hint">Loading saved sessions...</p>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Object Edit Modal (Floating Right Side Panel) -->
+  <div id="object-edit-modal" style="display: none; position: fixed; top: 76px; right: 20px; width: 320px; z-index: 999; pointer-events: auto;">
+    <div class="modal-content" style="background: #0f172a; border: 1px solid rgba(255,255,255,0.08); border-radius: 12px; width: 100%; padding: 18px; box-shadow: 0 12px 32px rgba(0,0,0,0.55); display: flex; flex-direction: column; gap: 14px; backdrop-filter: blur(8px);">
+      <div style="display: flex; justify-content: space-between; align-items: center;">
+        <h3 style="margin: 0; font-size: 14px; font-weight: 700; color: #fff; text-transform: uppercase; letter-spacing: 0.5px;">Edit Object <span id="modal-obj-number" style="color: #fb923c;">#1</span></h3>
+        <button id="close-modal-btn" style="background: none; border: none; color: #94a3b8; cursor: pointer; font-size: 16px; font-weight: 700;">✕</button>
+      </div>
+      <div class="input-group" style="display: flex; flex-direction: column; gap: 4px;">
+        <label style="font-size: 10px; color: #94a3b8; text-transform: uppercase; text-align: left;">Label / Name</label>
+        <input type="text" id="modal-obj-label" style="background: rgba(255,255,255,0.04); border: 1px solid rgba(255,255,255,0.1); border-radius: 6px; color: #fff; padding: 6px 10px; font-size: 12px;">
+      </div>
+      <div style="display: flex; gap: 12px;">
+        <div class="input-group" style="flex: 1; display: flex; flex-direction: column; gap: 4px;">
+          <label style="font-size: 10px; color: #94a3b8; text-transform: uppercase; text-align: left;">Width (cm)</label>
+          <input type="number" id="modal-obj-width" style="background: rgba(255,255,255,0.04); border: 1px solid rgba(255,255,255,0.1); border-radius: 6px; color: #fff; padding: 6px 10px; font-size: 12px;">
+        </div>
+        <div class="input-group" style="flex: 1; display: flex; flex-direction: column; gap: 4px;">
+          <label style="font-size: 10px; color: #94a3b8; text-transform: uppercase; text-align: left;">Depth (cm)</label>
+          <input type="number" id="modal-obj-depth" style="background: rgba(255,255,255,0.04); border: 1px solid rgba(255,255,255,0.1); border-radius: 6px; color: #fff; padding: 6px 10px; font-size: 12px;">
+        </div>
+      </div>
+      <div style="display: flex; gap: 12px; align-items: center;">
+        <div class="input-group" style="flex: 1; display: flex; flex-direction: column; gap: 4px;">
+          <label style="font-size: 10px; color: #94a3b8; text-transform: uppercase; text-align: left;">Rotation (°)</label>
+          <input type="number" id="modal-obj-rotation" style="background: rgba(255,255,255,0.04); border: 1px solid rgba(255,255,255,0.1); border-radius: 6px; color: #fff; padding: 6px 10px; font-size: 12px;">
+        </div>
+        <div class="input-group" style="flex: 1; display: flex; flex-direction: column; gap: 4px;">
+          <label style="font-size: 10px; color: #94a3b8; text-transform: uppercase; text-align: left;">Shape Type</label>
+          <select id="modal-obj-shape" style="background: #0f172a; border: 1px solid rgba(255,255,255,0.1); border-radius: 6px; color: #fff; padding: 6px 10px; font-size: 12px; height: 31px; outline: none; cursor: pointer;">
+            <option value="rectangle">Rectangle</option>
+            <option value="l-shape">L-Shape</option>
+            <option value="polygon">Custom Polygon</option>
+          </select>
+        </div>
+      </div>
+      <div class="input-group" style="display: flex; justify-content: space-between; align-items: center; background: rgba(255,255,255,0.02); border: 1px solid rgba(255,255,255,0.05); border-radius: 6px; padding: 6px 10px; margin-top: 2px;">
+        <label style="font-size: 10px; color: #94a3b8; text-transform: uppercase; margin: 0;">Flip Shape</label>
+        <div style="display: flex; gap: 14px; align-items: center;">
+          <label style="display: flex; align-items: center; gap: 5px; font-size: 11px; color: #fff; cursor: pointer; user-select: none; margin: 0;">
+            <input type="checkbox" id="modal-obj-flip-h" style="accent-color: #3b82f6; cursor: pointer; margin: 0; width: 13px; height: 13px;"> Horiz
+          </label>
+          <label style="display: flex; align-items: center; gap: 5px; font-size: 11px; color: #fff; cursor: pointer; user-select: none; margin: 0;">
+            <input type="checkbox" id="modal-obj-flip-v" style="accent-color: #3b82f6; cursor: pointer; margin: 0; width: 13px; height: 13px;"> Vert
+          </label>
+        </div>
+      </div>
+      <div id="modal-leg-thickness-group" class="input-group" style="display: none; flex-direction: column; gap: 4px;">
+        <label style="font-size: 10px; color: #94a3b8; text-transform: uppercase; text-align: left;">Leg Thickness (cm)</label>
+        <input type="number" id="modal-obj-leg-thickness" value="40" style="background: rgba(255,255,255,0.04); border: 1px solid rgba(255,255,255,0.1); border-radius: 6px; color: #fff; padding: 6px 10px; font-size: 12px;">
+      </div>
+
+      <button id="modal-draw-shape-btn" class="btn btn-secondary" style="border: 1px solid rgba(139,92,246,0.4); color: #c084fc; background: rgba(139,92,246,0.05); padding: 8px 12px; font-size: 12px; width: 100%; display: flex; align-items: center; justify-content: center; gap: 6px; cursor: pointer;">
+        <i data-lucide="pencil-ruler" style="width:14px; height:14px;"></i> Draw Custom Shape
+      </button>
+
+      <div style="display: flex; gap: 10px; margin-top: 4px;">
+        <button id="delete-modal-btn" class="btn btn-secondary" style="border: 1px solid #ef4444; color: #ef4444; background: rgba(239,68,68,0.05); padding: 8px 12px; font-size: 12px; flex: 1; cursor: pointer;">Delete</button>
+        <button id="save-modal-btn" class="btn btn-primary" style="background: #3b82f6; border: 1px solid #2563eb; color: #fff; padding: 8px 12px; font-size: 12px; flex: 1; cursor: pointer;">Save Changes</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Render Perspective Confirmation Modal -->
+  <div id="render-confirm-modal" class="modal-overlay" style="display: none; justify-content: center; align-items: center; z-index: 1000; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(2, 6, 17, 0.85); backdrop-filter: blur(4px);">
+    <div class="modal-card" style="width: 500px; max-width: 90vw; background: #0f172a; border: 1px solid rgba(255,255,255,0.08); border-radius: 14px; box-shadow: 0 20px 50px rgba(0,0,0,0.6); overflow: hidden; display: flex; flex-direction: column;">
+      <div class="modal-header" style="padding: 16px 20px; border-bottom: 1px solid rgba(255,255,255,0.08); display: flex; justify-content: space-between; align-items: center; background: rgba(255,255,255,0.01);">
+        <h3 style="margin: 0; font-size: 15px; font-weight: 700; color: #fff; display: flex; align-items: center; gap: 8px;">
+          <span style="color: #3b82f6; font-size: 18px;">📸</span> Confirm Render Perspective
+        </h3>
+        <button id="close-render-confirm-btn" style="background: none; border: none; color: #94a3b8; cursor: pointer; font-size: 20px; font-weight: 700; padding: 0; line-height: 1;">&times;</button>
+      </div>
+      <div class="modal-body" style="padding: 20px; display: flex; flex-direction: column; gap: 16px;">
+        <p style="margin: 0; font-size: 13px; color: #94a3b8; line-height: 1.5; text-align: left;">
+          Is this the 3D perspective you want to render? The AI will use this exact camera view to build the final photorealistic design. You can rotate, pan, or zoom the 3D viewport to adjust it.
+        </p>
+        
+        <!-- Perspective Preview Image Container -->
+        <div style="width: 100%; height: 260px; background: #020617; border-radius: 8px; overflow: hidden; border: 1px solid rgba(255,255,255,0.05); display: flex; align-items: center; justify-content: center; position: relative;">
+          <img id="render-confirm-preview" style="width: 100%; height: 100%; object-fit: cover; display: none;">
+          <div id="render-confirm-placeholder" style="color: #64748b; font-size: 12px; display: flex; flex-direction: column; align-items: center; gap: 8px;">
+            <span style="font-size: 24px; display: inline-block;">⚙️</span>
+            Capturing 3D viewport...
+          </div>
+        </div>
+
+        <div style="display: flex; gap: 12px; margin-top: 8px;">
+          <button id="adjust-render-btn" class="btn btn-secondary" style="flex: 1; padding: 10px; font-size: 13px; border: 1px solid rgba(255,255,255,0.1); background: rgba(255,255,255,0.03); color: #fff; cursor: pointer; border-radius: 6px;">
+            🔄 No, Let Me Adjust
+          </button>
+          <button id="proceed-render-btn" class="btn btn-primary" style="flex: 1; padding: 10px; font-size: 13px; background: #3b82f6; border: 1px solid #2563eb; color: #fff; cursor: pointer; border-radius: 6px; font-weight: 600;">
+            🚀 Yes, Proceed to Render
+          </button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Custom Shape Draw Instructions Banner -->
+  <div id="custom-shape-instructions" style="display: none; position: fixed; top: 80px; left: 50%; transform: translateX(-50%); background: rgba(15, 23, 42, 0.95); border: 1px solid #8b5cf6; border-radius: var(--radius-md); padding: 12px 20px; z-index: 1000; align-items: center; gap: 16px; backdrop-filter: blur(8px); box-shadow: 0 8px 32px rgba(0,0,0,0.5);">
+    <span style="font-size: 12px; color: #fff; font-weight: 500; display: flex; align-items: center; gap: 8px;">
+      <span style="width: 8px; height: 8px; background: #8b5cf6; border-radius: 50%; display: inline-block; animation: pulse 1.5s infinite;"></span>
+      Click to draw shape corners. Double-click or click "Done" to close loop.
+    </span>
+    <div style="display: flex; gap: 8px;">
+      <button id="cancel-custom-shape-btn" class="btn btn-mini" style="background: rgba(239, 68, 68, 0.1); border: 1px solid rgba(239, 68, 68, 0.4); color: #f87171; padding: 4px 10px; font-size: 11px; cursor: pointer;">Cancel</button>
+      <button id="done-custom-shape-btn" class="btn btn-mini" style="background: rgba(169, 85, 247, 0.2); border: 1px solid rgba(169, 85, 247, 0.4); color: #c084fc; padding: 4px 10px; font-size: 11px; cursor: pointer;">Done</button>
+    </div>
+  </div>
+
+  <!-- Lucide icons init -->
+  <script>lucide.createIcons();</script>
+  <!-- Main JavaScript File -->
+  <script type="module" src="index.js"></script>
+</body>
+</html>
