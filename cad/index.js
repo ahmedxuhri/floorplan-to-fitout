@@ -88,6 +88,7 @@ const aiBlenderPreviewBtn = document.getElementById('ai-blender-preview-btn');
 const setCameraBtn   = document.getElementById('set-camera-btn');
 const blenderRenderBtn = document.getElementById('blender-render-btn');
 const blindRenderBtn   = document.getElementById('blind-render-btn');
+const autoScanBtn      = document.getElementById('auto-scan-btn');
 const tabThree = document.getElementById('tab-three');
 const tabBlender = document.getElementById('tab-blender');
 const viewer3dContainer = document.getElementById('viewer-3d-container');
@@ -1726,6 +1727,7 @@ function updatePipelineState() {
   const hasCameras = cameraPositions.length > 0;
   const skipTrace  = skipTraceCheckbox && skipTraceCheckbox.checked;
 
+  if (autoScanBtn) autoScanBtn.disabled = !hasFile;
   aiBtn.disabled          = !hasFile || skipTrace;
   identifyBtn.disabled    = !hasFile;
   aiBlenderPreviewBtn.disabled = !hasWalls;
@@ -2186,6 +2188,129 @@ function removeFile() {
   fileInfo.style.display = 'none';
   draw2D();
   updatePipelineState();
+}
+
+// ─── Auto Scan: one-shot full floor plan analysis ───────────────────────────
+async function runAutoScan() {
+  const file = uploadedFile;
+  if (!file) return;
+
+  scannerOverlay.querySelector('.scanner-text').textContent = 'Auto Scanning Floor Plan...';
+  scannerOverlay.style.display = 'flex';
+  if (autoScanBtn) autoScanBtn.disabled = true;
+  showPipelineStatus('🔍 Auto Scanning: extracting walls, doors, objects and cameras in one shot...');
+
+  await initSession();
+
+  const formData = new FormData();
+  formData.append('image', file);
+  if (sessionId) formData.append('sessionId', sessionId);
+  if (cadDesignBrief && cadDesignBrief.value.trim()) {
+    formData.append('designBrief', cadDesignBrief.value.trim());
+  }
+
+  try {
+    const response = await fetch('/api/cad/auto-scan', {
+      method: 'POST', headers: getApiHeaders(), body: formData
+    });
+    const result = await handleAIResponse(response, 'Auto Scan');
+
+    // ── 1. Walls & corners ──
+    corners = result.corners || {};
+    walls   = result.walls   || [];
+
+    // ── 2. Scale calibration ──
+    if (result.imageWidth && result.imageHeight) {
+      calibrateWidth  = result.imageWidth  / 100;
+      calibrateHeight = result.imageHeight / 100;
+      widthInput.value  = calibrateWidth.toFixed(2);
+      heightInput.value = calibrateHeight.toFixed(2);
+    } else {
+      // Fallback: derive from max corner coordinates
+      let maxX = 0, maxY = 0;
+      Object.values(corners).forEach(c => {
+        if (c.x > maxX) maxX = c.x;
+        if (c.y > maxY) maxY = c.y;
+      });
+      if (maxX > calibrateWidth  * 100) { calibrateWidth  = Math.ceil(maxX / 100); widthInput.value  = calibrateWidth; }
+      if (maxY > calibrateHeight * 100) { calibrateHeight = Math.ceil(maxY / 100); heightInput.value = calibrateHeight; }
+    }
+
+    // ── 3. Objects (furniture) ──
+    const furniture = (result.objects || []).map(o => ({
+      ...o,
+      label: o.typeGuess,
+      referenceDescription: null,
+      rotation: o.rotation || 0
+    }));
+
+    // ── 4. Doors → identifiedObjects with type 'door' (rebuild3D cuts wall openings automatically) ──
+    const doors = (result.doors || []).map(d => ({
+      id: d.id,
+      x: d.x, y: d.y,
+      w: d.w || 90, h: d.h || 200,
+      typeGuess: 'door', label: 'door',
+      referenceDescription: d.label || null,
+      rotation: 0
+    }));
+
+    // ── 5. Windows → identifiedObjects with type 'window' (rebuild3D cuts wall openings automatically) ──
+    const windows = (result.windows || []).map(w => ({
+      id: w.id,
+      x: w.x, y: w.y,
+      w: w.w || 120, h: w.h || 120,
+      typeGuess: 'window', label: 'window',
+      referenceDescription: null,
+      rotation: 0,
+      sillHeight: w.sillHeight || 90
+    }));
+
+    identifiedObjects = [...furniture, ...doors, ...windows];
+
+    // ── 6. Pre-seed AI-suggested cameras ──
+    if (result.suggestedCameras && result.suggestedCameras.length > 0) {
+      cameraPositions = result.suggestedCameras.map(cam => ({
+        id:    cam.id,
+        x:     cam.x,
+        y:     cam.y,
+        angle: cam.angle,
+        label: cam.label || 'AI Camera',
+        fov:   60
+      }));
+      selectedCamera = cameraPositions[0].id;
+    }
+
+    // ── 7. Store rooms data for context (used in blind render prompts) ──
+    window._autoScanRooms = result.rooms || [];
+
+    // ── 8. Render everything ──
+    resetViewOffset();
+    draw2D();
+    renderObjectLibrary();
+    updateCameraList();
+    rebuild3D();
+    updatePipelineState();
+
+    // Show object panel
+    cardObjects.style.display = '';
+    if (viewObjects) viewObjects.disabled = false;
+    setViewMode('split');
+    setTool('select');
+
+    const wallCount   = walls.length;
+    const doorCount   = doors.length;
+    const winCount    = windows.length;
+    const objCount    = furniture.length;
+    const camCount    = cameraPositions.length;
+    showPipelineStatus(`✓ Auto Scan complete — ${wallCount} walls, ${doorCount} doors, ${winCount} windows, ${objCount} objects, ${camCount} camera${camCount !== 1 ? 's' : ''} pre-seeded. Ready for Blind AI Render!`);
+    setTimeout(hidePipelineStatus, 6000);
+  } catch (error) {
+    alert(`Auto Scan failed: ${error.message}`);
+    hidePipelineStatus();
+  } finally {
+    scannerOverlay.style.display = 'none';
+    if (autoScanBtn) autoScanBtn.disabled = !uploadedFile;
+  }
 }
 
 // ─── Step 1: AI Wall Trace ───────────────────────────────────────────────────
@@ -4191,6 +4316,7 @@ function bindUIEvents() {
   });
 
   // Pipeline steps
+  if (autoScanBtn) autoScanBtn.addEventListener('click', runAutoScan);
   aiBtn.addEventListener('click', runAITrace);
   if (skipTraceCheckbox) {
     skipTraceCheckbox.addEventListener('change', () => {

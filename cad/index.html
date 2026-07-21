@@ -144,7 +144,24 @@
         <section class="sidebar-section" id="cad-pipeline-section">
           <h2><i data-lucide="sparkles"></i> AI Pipeline</h2>
           <div class="pipeline-steps">
-            <button id="ai-btn" class="btn btn-primary pipeline-step" disabled>
+
+            <!-- AUTO SCAN: One-shot floor plan analysis -->
+            <button id="auto-scan-btn" class="btn btn-primary pipeline-step" disabled style="background: linear-gradient(135deg, hsl(262,80%,55%), hsl(220,80%,55%)); border: none; position: relative; overflow: hidden;">
+              <i data-lucide="scan-line"></i>
+              <span>🔍 Auto Scan — Full Analysis</span>
+            </button>
+            <p style="font-size: 11px; color: #64748b; margin: -4px 0 10px 4px; line-height: 1.4;">
+              Extracts walls, doors, windows, objects &amp; cameras in one AI call
+            </p>
+
+            <!-- Divider -->
+            <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 8px;">
+              <div style="flex:1; height:1px; background: rgba(255,255,255,0.08);"></div>
+              <span style="font-size: 10px; color: #475569; white-space: nowrap;">— or step-by-step —</span>
+              <div style="flex:1; height:1px; background: rgba(255,255,255,0.08);"></div>
+            </div>
+
+          <button id="ai-btn" class="btn btn-primary pipeline-step" disabled>
               <i data-lucide="wand-2"></i>
               <span>Step 1 — Trace Walls</span>
             </button>

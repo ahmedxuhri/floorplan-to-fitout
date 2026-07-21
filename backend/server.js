@@ -583,6 +583,140 @@ Return ONLY the markdown link to the generated image file, do not include any ot
   }
 });
 
+// ─── Auto Scan: unified floor plan analysis (walls + doors + windows + rooms + objects + cameras) ───
+app.post('/auto-scan', upload.single('image'), async (req, res) => {
+  let tempFilePath = null;
+  try {
+    if (!req.file) return res.status(400).json({ error: 'No image file uploaded.' });
+    console.log(`[auto-scan] Received file: ${req.file.originalname}, size: ${req.file.size} bytes`);
+
+    tempFilePath = await saveBufferToTempFile(req.file.buffer, 'autoscan', req.file.mimetype);
+    await resizeImageWithPython(tempFilePath);
+
+    const designBrief = req.body && req.body.designBrief ? req.body.designBrief : '';
+    const sessionId   = req.body && req.body.sessionId  ? req.body.sessionId  : null;
+    const conversationId = sessionId && sessions.has(sessionId) ? sessions.get(sessionId).conversationUUID : null;
+    const tempDir = path.join(__dirname, 'temp_uploads');
+
+    clearTempJsonFiles(tempDir);
+    if (sessionId) sessionLog(sessionId, 'system', '🔍 Auto Scan: analysing floor plan...');
+
+    const prompt = `
+Analyze the 2D floor plan blueprint image located at the absolute path: ${tempFilePath}
+${designBrief ? `\nDesign Brief / Space Context:\n"${designBrief}"\nUse this to understand the type of establishment, room purposes, and expected furniture/fixtures.\n` : ''}
+
+You are an expert architectural floor plan digitizer. In ONE single pass, extract ALL of the following from the image:
+
+COORDINATE SYSTEM: Top-left corner of the ENTIRE image (including all margins) is (0, 0). All coordinates are in centimetres.
+
+━━━ 1. SCALE ━━━
+- Look for dimension markings on the blueprint (e.g. "4.80m", "12.00m") to calibrate pixel→cm scale.
+- Output "imageWidth" and "imageHeight": the estimated real-world size of the ENTIRE image frame in cm (including margins).
+
+━━━ 2. WALLS ━━━
+- Extract ALL structural wall corners as unique IDs (c1, c2, …) with (x, y) in cm.
+- Extract wall segments as pairs of corner IDs.
+- Include outer perimeter walls AND all interior partition walls.
+- CRITICAL: Enforce strict orthogonal alignment. Horizontal walls: both corners share IDENTICAL Y. Vertical walls: both corners share IDENTICAL X. Snap any measurement noise.
+- IGNORE: dimension lines, door swing arcs, furniture symbols, annotations, labels.
+
+━━━ 3. DOORS ━━━
+- Detect every door symbol (usually an arc + a line segment on a wall).
+- For each door output: id (door_1, door_2, …), centroid x/y in cm, width w in cm (typical 80–100cm), height h (use 200 as default), swingDirection ("inward" or "outward"), and label (room label from the plan if visible, e.g. "Bathroom", "Kitchen").
+
+━━━ 4. WINDOWS ━━━
+- Detect every window symbol (a double or triple line break in a wall).
+- For each window output: id (win_1, win_2, …), centroid x/y in cm, width w in cm, height h (use 120 as default), sillHeight (use 90 as default if not marked).
+
+━━━ 5. ROOMS ━━━
+- Identify every enclosed room/space by its label text on the plan.
+- For each room output: id (room_1, room_2, …), label (the text label shown), centroid {x, y} in cm, areaM2 (estimated area in square metres).
+
+━━━ 6. OBJECTS ━━━
+- Identify every furniture/fixture SYMBOL — NOT walls, NOT dimension lines, NOT text annotations.
+- For each object output: id (obj_1, obj_2, …), centroid x/y in cm, bounding box w/h in cm, typeGuess (use one of: dining_table, table, chair, bar_stool, sofa, counter, kitchen_counter, bar, sink, stove, oven, refrigerator, display_case, shelves, staircase, stairs, plant, generic), rotation in degrees (0 if unknown).
+
+━━━ 7. SUGGESTED CAMERAS ━━━
+- Based on the design brief and the room layout, suggest 1 to 3 optimal camera positions for architectural photography.
+- Each camera should face toward the most interesting or representative part of the space.
+- For each camera output: id (cam_1, cam_2, …), x/y in cm (camera pin position), angle in degrees (0=north/up, 90=east/right, 180=south/down, 270=west/left — the direction the camera is FACING), label (short descriptive name), reasoning (one sentence why).
+
+━━━ OUTPUT FORMAT ━━━
+Output ONLY a single raw JSON object matching EXACTLY this schema. No explanations, no markdown, no additional text:
+
+{
+  "imageWidth": number,
+  "imageHeight": number,
+  "corners": {
+    "c1": { "x": number, "y": number },
+    "c2": { "x": number, "y": number }
+  },
+  "walls": [
+    { "corner1": "c1", "corner2": "c2" }
+  ],
+  "doors": [
+    { "id": "door_1", "x": number, "y": number, "w": number, "h": number, "swingDirection": "inward", "label": "string" }
+  ],
+  "windows": [
+    { "id": "win_1", "x": number, "y": number, "w": number, "h": number, "sillHeight": number }
+  ],
+  "rooms": [
+    { "id": "room_1", "label": "string", "centroid": { "x": number, "y": number }, "areaM2": number }
+  ],
+  "objects": [
+    { "id": "obj_1", "x": number, "y": number, "w": number, "h": number, "typeGuess": "string", "rotation": number }
+  ],
+  "suggestedCameras": [
+    { "id": "cam_1", "x": number, "y": number, "angle": number, "label": "string", "reasoning": "string" }
+  ]
+}
+
+CRITICAL RULES:
+1. Do NOT execute any terminal commands, shell commands, or Python scripts.
+2. Use your native vision capability to inspect the image. Perform all measurements internally.
+3. Output the raw JSON in your FIRST reply step. No other text before or after.
+`;
+
+    const result = await runAgyCommand(prompt, { sessionId, conversationId, logPrefix: 'auto-scan' });
+
+    if (checkForQuotaError(result.stdout, result.stderr, conversationId)) {
+      console.error('[auto-scan] Quota/rate-limit error');
+      return res.status(429).json({ error: 'AI quota or rate limit reached. Please wait a few minutes and try again.', isQuotaError: true });
+    }
+    if (result.code !== 0) {
+      throw new Error(`agy CLI exited with code ${result.code} at auto-scan. Stderr: ${result.stderr}`);
+    }
+
+    const parsedData = extractJSON(result.stdout, tempDir);
+    if (!parsedData) {
+      console.error('[auto-scan] Failed to extract JSON from stdout:', result.stdout);
+      throw new Error(`Could not extract JSON from agy auto-scan response (${result.stdout.length} bytes)`);
+    }
+
+    // Ensure required fields exist with sensible defaults
+    parsedData.corners         = parsedData.corners         || {};
+    parsedData.walls           = parsedData.walls           || [];
+    parsedData.doors           = parsedData.doors           || [];
+    parsedData.windows         = parsedData.windows         || [];
+    parsedData.rooms           = parsedData.rooms           || [];
+    parsedData.objects         = parsedData.objects         || [];
+    parsedData.suggestedCameras = parsedData.suggestedCameras || [];
+
+    console.log(`[auto-scan] Success — corners:${Object.keys(parsedData.corners).length} walls:${parsedData.walls.length} doors:${parsedData.doors.length} windows:${parsedData.windows.length} objects:${parsedData.objects.length} cameras:${parsedData.suggestedCameras.length}`);
+    if (sessionId) sessionLog(sessionId, 'system', `✅ Auto Scan complete — ${Object.keys(parsedData.corners).length} corners, ${parsedData.walls.length} walls, ${parsedData.doors.length} doors, ${parsedData.windows.length} windows, ${parsedData.objects.length} objects, ${parsedData.suggestedCameras.length} camera(s) suggested`);
+
+    res.json(parsedData);
+
+  } catch (error) {
+    console.error('[auto-scan] Error:', error);
+    res.status(500).json({ error: error.message || 'Internal server error.' });
+  } finally {
+    if (tempFilePath && fs.existsSync(tempFilePath)) {
+      try { fs.unlinkSync(tempFilePath); } catch (e) {}
+    }
+  }
+});
+
 // AI identifies furniture/fixtures in a floor plan image
 app.post('/identify', upload.single('image'), async (req, res) => {
   let tempFilePath = null;
