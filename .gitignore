@@ -22,3 +22,9 @@ backend/saved_sessions/*
 __pycache__/
 *.pyc
 
+# Environment & Secrets
+.env
+.env.*
+*.pem
+*.key
+
