@@ -86,21 +86,21 @@ const upload = multer({ storage: multer.memoryStorage() });
 // options: { conversationId, sessionId, logPrefix }
 function runAgyCommand(promptText, options = {}) {
   return new Promise((resolve, reject) => {
-    const { conversationId, sessionId, logPrefix = 'agy' } = options;
+    const { conversationId, sessionId, logPrefix = 'agy', spawnTimeout = 85000 } = options;
     const args = ['--dangerously-skip-permissions', '--print-timeout', '10m', '--model', 'Gemini 3.5 Flash (Medium)'];
     if (conversationId) {
       args.push('--conversation', conversationId);
     }
     args.push('-p', promptText);
 
-    console.log(`[${logPrefix}] Spawning agy CLI, prompt length: ${promptText.length}${conversationId ? `, conv: ${conversationId}` : ''}`);
+    console.log(`[${logPrefix}] Spawning agy CLI, prompt length: ${promptText.length}${conversationId ? `, conv: ${conversationId}` : ''}, timeout: ${spawnTimeout}ms`);
     if (sessionId) sessionLog(sessionId, 'system', `⚙️ Spawning AI agent...`);
 
     const child = spawn('/root/.local/bin/agy', args, {
       cwd: '/tmp',
       env: process.env,
       stdio: ['ignore', 'pipe', 'pipe'],
-      timeout: 85000 // Timeout after 85 seconds to prevent Cloudflare 524
+      timeout: spawnTimeout
     });
 
     let stdout = '';
@@ -1632,7 +1632,10 @@ CRITICAL RULES FOR EFFICIENCY:
 3. Print the raw JSON object directly. Do NOT explain your steps or print anything else beside the JSON.
 `;
 
-    const stage2Result = await runAgyCommand(stage2Prompt, { sessionId, logPrefix: 'blind-s2' });
+    const stage2Result = await runAgyCommand(stage2Prompt, { sessionId, logPrefix: 'blind-s2', spawnTimeout: 270000 });
+    if (checkForQuotaError(stage2Result.stdout, stage2Result.stderr)) {
+      return res.status(429).json({ error: 'AI quota or rate limit reached. Please wait a few minutes and try again.', isQuotaError: true });
+    }
     if (stage2Result.code !== 0) {
       throw new Error(`agy CLI exited with code ${stage2Result.code} at Stage 2. Stderr: ${stage2Result.stderr}`);
     }
