@@ -28,3 +28,6 @@ __pycache__/
 *.pem
 *.key
 
+# Local Agent Config
+.agents/
+
