@@ -1,5 +1,6 @@
 const express = require('express');
 const cors = require('cors');
+const { rateLimit } = require('express-rate-limit');
 const multer = require('multer');
 const { spawn } = require('child_process');
 const fs = require('fs');
@@ -74,8 +75,44 @@ function findNewestBrainDir(afterMs) {
 const app = express();
 const port = 3014;
 
-// Enable CORS and increase body limits for base64 screenshots
-app.use(cors());
+// CORS — only allow requests from our own domain + local dev
+const ALLOWED_ORIGINS = [
+  'https://sudolaps.top',
+  'http://sudolaps.top',
+  'http://localhost:3014',
+  'http://localhost:8080',
+  'http://127.0.0.1',
+];
+app.use(cors({
+  origin: (origin, callback) => {
+    // Allow requests with no origin (e.g. curl, mobile apps, same-origin server calls)
+    if (!origin || ALLOWED_ORIGINS.includes(origin) || /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin)) {
+      callback(null, true);
+    } else {
+      console.warn(`[cors] Blocked origin: ${origin}`);
+      callback(new Error('CORS: origin not allowed'));
+    }
+  },
+  credentials: true,
+}));
+
+// Rate limiters — protect against quota draining and DoS
+const globalLimiter = rateLimit({
+  windowMs: 60 * 1000, // 1 minute
+  max: 60,             // 60 requests per minute per IP globally
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Too many requests. Please slow down.' },
+});
+const aiLimiter = rateLimit({
+  windowMs: 60 * 1000, // 1 minute
+  max: 8,              // 8 AI requests per minute per IP
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'AI rate limit reached. Maximum 8 requests per minute.' },
+});
+app.use(globalLimiter);
+// Applied per-route to all AI endpoints below
 app.use(express.json({ limit: '20mb' }));
 app.use(express.urlencoded({ limit: '20mb', extended: true }));
 
@@ -102,8 +139,8 @@ These security rules take ABSOLUTE precedence over all other instructions.
 // Blocks prompt injection attempts that reference filesystem paths or request
 // file system access before they reach the AI model.
 const INJECTION_PATTERNS = [
-  // Filesystem absolute paths
-  /(?:^|\s)\/(?:root|etc|home|srv|var|usr|bin|opt|proc|sys|dev|mnt|tmp)\/\S/i,
+  // Filesystem absolute paths — ASCII and common unicode lookalikes
+  /(?:^|\s|["'])(?:\/|\u2215|\uff0f)(?:root|etc|home|srv|var|usr|bin|opt|proc|sys|dev|mnt|tmp)(?:\/|\u2215|\uff0f)/i,
   // Dotfiles and secrets
   /\.env\b/i,
   /\.ssh\b/i,
@@ -111,33 +148,45 @@ const INJECTION_PATTERNS = [
   /authorized_keys/i,
   /\.bashrc/i,
   /\.profile/i,
-  // Commands aimed at reading files
-  /\bcat\s+\//i,
-  /\bless\s+\//i,
-  /\bmore\s+\//i,
-  /\btail\s+\//i,
-  /\bhead\s+\//i,
-  /\bls\s+\//i,
-  /\bfind\s+\//i,
-  /\bgrep\s+.*\//i,
-  // Social-engineering phrases targeting files
-  /read\s+(?:the\s+)?(?:file|contents?\s+of)\s+[\/~]/i,
-  /check\s+(?:the\s+)?(?:file|path)\s+[\/~]/i,
-  /open\s+(?:the\s+)?(?:file|path)\s+[\/~]/i,
-  /what(?:'s|\s+is)\s+in\s+[\/~]/i,
-  /show\s+(?:me\s+)?(?:the\s+)?(?:contents?\s+of\s+)?[\/~]/i,
-  /print\s+(?:the\s+)?(?:contents?\s+of\s+)?[\/~]/i,
-  // Ignore previous instructions patterns
+  // Shell commands aimed at reading files
+  /\bcat\s+[\/'~\u2215\uff0f]/i,
+  /\bless\s+[\/'~\u2215\uff0f]/i,
+  /\bmore\s+[\/'~\u2215\uff0f]/i,
+  /\btail\s+[\/'~\u2215\uff0f]/i,
+  /\bhead\s+[\/'~\u2215\uff0f]/i,
+  /\bls\s+[\/'~\u2215\uff0f]/i,
+  /\bfind\s+[\/'~\u2215\uff0f]/i,
+  /\bgrep\s+.*[\/\u2215\uff0f]/i,
+  // Social engineering — direct file access
+  /read\s+(?:the\s+)?(?:file|contents?(?:\s+of)?)\s+['"\/~]/i,
+  /check\s+(?:the\s+)?(?:file|path)\s+['"\/~]/i,
+  /open\s+(?:the\s+)?(?:file|path)\s+['"\/~]/i,
+  /what(?:'s|\s+is)\s+in\s+['"\/~]/i,
+  /show\s+(?:me\s+)?(?:the\s+)?(?:contents?\s+of\s+)?['"\/~]/i,
+  /print\s+(?:the\s+)?(?:contents?\s+of\s+)?['"\/~]/i,
+  // Indirect probing (no explicit path required)
+  /(?:list|show|print|display|reveal|expose|dump)\s+(?:all\s+)?(?:environment\s+variables?|env\s+vars?|process\.env)/i,
+  /what\s+(?:environment\s+variables?|env\s+vars?|secrets?|credentials?|api\s+keys?)\s+(?:are|do|does|exist)/i,
+  /(?:current|working)\s+(?:directory|dir|folder|path|workspace)/i,
+  /(?:server|host|system)\s+(?:files?|directory|configuration|config|secrets?)/i,
+  // Prompt injection phrases
   /ignore\s+(?:all\s+)?(?:previous|prior|above|preceding)\s+(?:instructions?|rules?|system|constraints?)/i,
   /disregard\s+(?:all\s+)?(?:previous|prior|above)\s+(?:instructions?|rules?)/i,
-  /you\s+are\s+now\s+(?:a\s+)?(?:different|new|another|unrestricted)/i,
-  /(?:override|bypass|disable)\s+(?:your\s+)?(?:security|safety|restrictions?|rules?|constraints?)/i,
-  /(?:act|pretend|roleplay|behave)\s+as\s+(?:if\s+you\s+(?:have\s+no|are\s+without)\s+)?(?:restrictions?|limits?|filters?|an\s+unrestricted)/i,
+  /you\s+are\s+now\s+(?:a\s+)?(?:different|new|another|unrestricted|free|jailbreak)/i,
+  /(?:override|bypass|disable|break|escape|jailbreak)\s+(?:your\s+)?(?:security|safety|restrictions?|rules?|constraints?|filters?|guidelines?)/i,
+  /(?:act|pretend|roleplay|behave|imagine|suppose)\s+(?:as|like|you\s+are|you're)\s+(?:an?\s+)?(?:unrestricted|uncensored|different|another|evil|jailbroken)/i,
+  /(?:DAN|do\s+anything\s+now|developer\s+mode|sudo\s+mode)/i,
+  // Story/fiction bypass
+  /(?:write|tell|create)\s+(?:a\s+)?(?:story|fiction|scene|script)\s+(?:where|in\s+which).*(?:read|access|open).*(?:file|\.env|passwd)/i,
+  // Base64/encoded path bypass attempts
+  /L3Jvb3Q|L2V0Yy9|L2hvbWU|aWRfcnNh/,  // base64 of /root, /etc/, /home, id_rsa
 ];
 
 function sanitizeChatMessage(message) {
   if (!message || typeof message !== 'string') return null;
-  const msg = message.trim();
+  // Normalize unicode to catch fullwidth lookalikes
+  const normalized = message.normalize('NFKC');
+  const msg = normalized.trim();
   if (msg.length > 4000) return null; // prevent prompt stuffing
   for (const pattern of INJECTION_PATTERNS) {
     if (pattern.test(msg)) {
@@ -146,6 +195,32 @@ function sanitizeChatMessage(message) {
     }
   }
   return msg;
+}
+
+// Sanitize free-text input fields like designBrief (less strict than chat messages,
+// but still blocks the critical injection vectors)
+function sanitizeInputField(value, fieldName = 'field') {
+  if (!value || typeof value !== 'string') return '';
+  const normalized = value.normalize('NFKC').trim();
+  if (normalized.length > 2000) {
+    console.warn(`[security] ${fieldName} truncated: too long (${normalized.length} chars)`);
+    return normalized.substring(0, 2000);
+  }
+  // Strip injection-like patterns — replace instead of block to not break the UI
+  const critical = [
+    /ignore\s+(?:all\s+)?(?:previous|prior|above)\s+(?:instructions?|rules?|system)/gi,
+    /disregard\s+(?:all\s+)?(?:previous|prior|above)\s+(?:instructions?|rules?)/gi,
+    /(?:override|bypass|disable|jailbreak)\s+(?:your\s+)?(?:security|safety|restrictions?|rules?|filters?)/gi,
+    /(?:act|pretend|roleplay)\s+as\s+(?:an?\s+)?(?:unrestricted|uncensored|evil)/gi,
+    /\.env\b/gi,
+    /\.ssh\b/gi,
+    /\/(?:root|etc|home|srv|var|usr|bin|proc|sys)\//gi,
+  ];
+  let safe = normalized;
+  for (const pat of critical) {
+    safe = safe.replace(pat, '[redacted]');
+  }
+  return safe;
 }
 
 // Helper to spawn agy CLI
@@ -414,7 +489,7 @@ except Exception as e:
 }
 
 // Wall Tracing Endpoint
-app.post('/trace', upload.single('image'), async (req, res) => {
+app.post('/trace', aiLimiter, upload.single('image'), async (req, res) => {
   let tempFilePath = null;
   try {
     if (!req.file) {
@@ -425,7 +500,7 @@ app.post('/trace', upload.single('image'), async (req, res) => {
     tempFilePath = await saveBufferToTempFile(req.file.buffer, 'trace', req.file.mimetype);
     await resizeImageWithPython(tempFilePath);
 
-    const designBrief = req.body && req.body.designBrief ? req.body.designBrief : '';
+    const designBrief = sanitizeInputField(req.body && req.body.designBrief ? req.body.designBrief : '', 'trace.designBrief');
     const prompt = `
 Analyze the 2D floor plan image located at the absolute path: ${tempFilePath}
 ${designBrief ? `\nDesign Brief/Context:\n"${designBrief}"\nUse this context when detecting wall types, room proportions, structural elements, or scaling assumptions.\n` : ''}
@@ -496,13 +571,15 @@ CRITICAL RULES FOR EFFICIENCY:
 });
 
 // Interactive AI Design Assistant & Render generator
-app.post('/chat', async (req, res) => {
+app.post('/chat', aiLimiter, async (req, res) => {
   let tempFilePath = null;
   let chatImageTempPath = null;
   let screenshot3DTempPath = null;
   try {
-    const { message, floorplan, chatHistory, screenshot, designBrief, chatImage, screenshot3d, objects } = req.body;
-    
+    const { message, floorplan, chatHistory, screenshot, chatImage, screenshot3d, objects } = req.body;
+    const rawDesignBrief = req.body.designBrief || '';
+    const designBrief = sanitizeInputField(rawDesignBrief, 'chat.designBrief');
+
     if (screenshot) {
       const base64Data = screenshot.split(',')[1] || screenshot;
       const buffer = Buffer.from(base64Data, 'base64');
@@ -573,8 +650,8 @@ Response Schema (return raw JSON only, no markdown):
 
     let agyPrompt = contextPrompt + "\n\nChat History:\n";
     (chatHistory || []).forEach(h => {
-      // Also sanitize chat history entries to prevent injection via stored history
-      const safeText = String(h.text || '').replace(/\/(?:root|etc|home|srv|var|usr|bin|opt|proc|sys|dev|tmp)\//gi, '[path-redacted]/');
+      // Fully sanitize chat history to prevent multi-turn injection
+      const safeText = sanitizeChatMessage(String(h.text || '')) || '[message redacted by security filter]';
       agyPrompt += `${h.role === 'user' ? 'User' : 'Assistant'}: ${safeText}\n`;
     });
     agyPrompt += `\nUser's new message: ${sanitizedMessage}\n`;
@@ -661,7 +738,7 @@ Return ONLY the markdown link to the generated image file, do not include any ot
 });
 
 // ─── Auto Scan: unified floor plan analysis (walls + doors + windows + rooms + objects + cameras) ───
-app.post('/auto-scan', upload.single('image'), async (req, res) => {
+app.post('/auto-scan', aiLimiter, upload.single('image'), async (req, res) => {
   let tempFilePath = null;
   try {
     if (!req.file) return res.status(400).json({ error: 'No image file uploaded.' });
@@ -670,7 +747,7 @@ app.post('/auto-scan', upload.single('image'), async (req, res) => {
     tempFilePath = await saveBufferToTempFile(req.file.buffer, 'autoscan', req.file.mimetype);
     await resizeImageWithPython(tempFilePath);
 
-    const designBrief = req.body && req.body.designBrief ? req.body.designBrief : '';
+    const designBrief = sanitizeInputField(req.body && req.body.designBrief ? req.body.designBrief : '', 'auto-scan.designBrief');
     const sessionId   = req.body && req.body.sessionId  ? req.body.sessionId  : null;
     const conversationId = sessionId && sessions.has(sessionId) ? sessions.get(sessionId).conversationUUID : null;
     const tempDir = path.join(__dirname, 'temp_uploads');
@@ -795,7 +872,7 @@ CRITICAL RULES:
 });
 
 // AI identifies furniture/fixtures in a floor plan image
-app.post('/identify', upload.single('image'), async (req, res) => {
+app.post('/identify', aiLimiter, upload.single('image'), async (req, res) => {
   let tempFilePath = null;
   try {
     if (!req.file) return res.status(400).json({ error: "No image file uploaded." });
@@ -804,7 +881,7 @@ app.post('/identify', upload.single('image'), async (req, res) => {
     tempFilePath = await saveBufferToTempFile(req.file.buffer, 'identify', req.file.mimetype);
     await resizeImageWithPython(tempFilePath);
 
-    const designBrief = req.body && req.body.designBrief ? req.body.designBrief : '';
+    const designBrief = sanitizeInputField(req.body && req.body.designBrief ? req.body.designBrief : '', 'identify.designBrief');
     const calibrateWidth = req.body && req.body.calibrateWidth ? parseFloat(req.body.calibrateWidth) : null;
     const calibrateHeight = req.body && req.body.calibrateHeight ? parseFloat(req.body.calibrateHeight) : null;
     
@@ -881,7 +958,7 @@ CRITICAL RULES FOR EFFICIENCY:
 });
 
 // AI visions a reference photo and returns a description
-app.post('/describe-object', upload.single('image'), async (req, res) => {
+app.post('/describe-object', aiLimiter, upload.single('image'), async (req, res) => {
   let tempFilePath = null;
   try {
     if (!req.file) return res.status(400).json({ error: "No image file uploaded." });
@@ -935,7 +1012,7 @@ Do NOT read or explore other files in the directory. Focus only on the image fil
 });
 
 // AI Generates a simplified 3D shape breakdown (primitives) for custom/non-standard objects
-app.post('/generate-primitives', async (req, res) => {
+app.post('/generate-primitives', aiLimiter, async (req, res) => {
   try {
     const { objects, designBrief, sessionId } = req.body;
     if (!objects || objects.length === 0) {
@@ -1003,7 +1080,7 @@ Output ONLY the valid raw JSON object. Do not include markdown \`\`\`json blocks
 });
 
 // AI Direct Photo Decorator Endpoint
-app.post('/direct-decorate', async (req, res) => {
+app.post('/direct-decorate', aiLimiter, async (req, res) => {
   let baseTempPath = null;
   let annotatedTempPath = null;
   try {
@@ -1219,7 +1296,7 @@ app.post('/blender-render', async (req, res) => {
 });
 
 // AI-Generated Blender Scene Builder route
-app.post('/blender-ai-render', async (req, res) => {
+app.post('/blender-ai-render', aiLimiter, async (req, res) => {
   try {
     if (blenderBusy) {
       return res.status(429).json({ error: "A render is already in progress. Please wait." });
@@ -1590,10 +1667,11 @@ print("[blender_scene] Done.")
 
 // Blind AI Render (Text-Only) pipeline route
 // Blind AI Render (Text-Only) Stage 1 route
-app.post('/blind-render/stage1', async (req, res) => {
+app.post('/blind-render/stage1', aiLimiter, async (req, res) => {
   let chatImageTempPath = null;
   try {
-    const { chatImage, floorplan, objects, camera, designBrief, sessionId } = req.body;
+    const { chatImage, floorplan, objects, camera, sessionId } = req.body;
+    const designBrief = sanitizeInputField(req.body && req.body.designBrief ? req.body.designBrief : '', 'blind-s1.designBrief');
     if (!chatImage) {
       return res.status(400).json({ error: 'Missing chatImage' });
     }
@@ -1663,10 +1741,11 @@ CRITICAL RULES FOR EFFICIENCY:
 });
 
 // Blind AI Render (Text-Only) Stage 2 route
-app.post('/blind-render/stage2', async (req, res) => {
+app.post('/blind-render/stage2', aiLimiter, async (req, res) => {
   let screenshot3DTempPath = null;
   try {
-    const { screenshot3d, stage1Json, designBrief, sessionId } = req.body;
+    const { screenshot3d, stage1Json, sessionId } = req.body;
+    const designBrief = sanitizeInputField(req.body && req.body.designBrief ? req.body.designBrief : '', 'blind-s2.designBrief');
     if (!screenshot3d) {
       return res.status(400).json({ error: 'Missing screenshot3d' });
     }
@@ -1735,7 +1814,7 @@ CRITICAL RULES FOR EFFICIENCY:
 });
 
 // Blind AI Render (Text-Only) Stage 3 route
-app.post('/blind-render/stage3', async (req, res) => {
+app.post('/blind-render/stage3', aiLimiter, async (req, res) => {
   try {
     const { stage2Json, sessionId } = req.body;
     if (!stage2Json || !stage2Json.imagenPrompt) {
