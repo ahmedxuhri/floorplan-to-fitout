@@ -1234,7 +1234,7 @@ scene.render.filepath                   = output_path
 
 print(f"[blender_scene] Scene: {len(walls)} walls, {len(objects)} objects")
 if is_3d:
-    print(f"[blender_scene] Camera (3D) at ({bx:.2f}, {by:.2f}, {bz:.2f}) fov={math.degrees(cam_fov):.1f}°")
+    print(f"[blender_scene] Camera (3D) at ({bx:.2f}, {by:.2f}, {bz:.2f}) fov={math.degrees(fov_h):.1f}°")
 else:
     print(f"[blender_scene] Camera (2D) at ({cam_px},{cam_py}) angle={cam_ang}°, eye_h={eye_h}m")
 print(f"[blender_scene] Rendering → {output_path}")
