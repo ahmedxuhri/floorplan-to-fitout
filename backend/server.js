@@ -79,6 +79,7 @@ const port = 3014;
 const ALLOWED_ORIGINS = [
   'https://sudolaps.top',
   'http://sudolaps.top',
+  'https://sudolaps.top:8443',
   'http://localhost:3014',
   'http://localhost:8080',
   'http://127.0.0.1',
