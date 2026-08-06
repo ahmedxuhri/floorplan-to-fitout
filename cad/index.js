@@ -2653,7 +2653,29 @@ async function runBlenderRender() {
 }
 
 async function executeBlenderRender() {
-  const cam = cameraPositions.find(c => c.id === selectedCamera) || cameraPositions[0];
+  const dir = new THREE.Vector3();
+  camera.getWorldDirection(dir);
+  const liveAngle = Math.round(Math.atan2(dir.x, -dir.z) * 180 / Math.PI);
+  const centerOffsetX = (calibrateWidth * 100) / 2;
+  const centerOffsetZ = (calibrateHeight * 100) / 2;
+
+  const liveCam = {
+    id: 'live_viewport',
+    x: Math.round(camera.position.x + centerOffsetX),
+    y: Math.round(camera.position.z + centerOffsetZ),
+    angle: liveAngle,
+    is3d: true,
+    px: camera.position.x,
+    py: camera.position.y,
+    pz: camera.position.z,
+    dx: dir.x,
+    dy: dir.y,
+    dz: dir.z,
+    fov: camera.fov,
+    aspect: camera.aspect || (1280 / 720)
+  };
+
+  const cam = (currentViewMode === '3d' || currentViewMode === 'split') ? liveCam : (cameraPositions.find(c => c.id === selectedCamera) || cameraPositions[0] || liveCam);
 
   // Switch to AI Render view
   setViewMode('ai');
@@ -2904,7 +2926,29 @@ async function runBlindAIRender() {
   if (blindRenderBtn) blindRenderBtn.disabled = true;
   blenderRenderBtn.disabled = true;
 
-  const cam = cameraPositions.find(c => c.id === selectedCamera) || cameraPositions[0];
+  const dir = new THREE.Vector3();
+  camera.getWorldDirection(dir);
+  const liveAngle = Math.round(Math.atan2(dir.x, -dir.z) * 180 / Math.PI);
+  const centerOffsetX = (calibrateWidth * 100) / 2;
+  const centerOffsetZ = (calibrateHeight * 100) / 2;
+
+  const liveCam = {
+    id: 'live_viewport',
+    x: Math.round(camera.position.x + centerOffsetX),
+    y: Math.round(camera.position.z + centerOffsetZ),
+    angle: liveAngle,
+    is3d: true,
+    px: camera.position.x,
+    py: camera.position.y,
+    pz: camera.position.z,
+    dx: dir.x,
+    dy: dir.y,
+    dz: dir.z,
+    fov: camera.fov,
+    aspect: camera.aspect || (1280 / 720)
+  };
+
+  const cam = (currentViewMode === '3d' || currentViewMode === 'split') ? liveCam : (cameraPositions.find(c => c.id === selectedCamera) || cameraPositions[0] || liveCam);
   const designBrief = cadDesignBrief ? cadDesignBrief.value.trim() : '';
 
   try {
