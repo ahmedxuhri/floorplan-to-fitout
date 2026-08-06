@@ -1156,9 +1156,10 @@ else:
     yaw_rad = math.radians(cam_ang)
     cam.rotation_euler = (math.pi / 2, 0, yaw_rad)
 
-# Mirror the camera's X-axis to fix horizontal flip caused by handedness
+# Mirror the camera's X-axis ONLY for 2D floor plan cameras to fix horizontal flip
 # mismatch between the 2D floor plan (screen-space) and Blender's RH coords
-cam.scale.x = -1
+if not is_3d:
+    cam.scale.x = -1
 scene.camera = cam
 
 

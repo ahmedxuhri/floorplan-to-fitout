@@ -2739,7 +2739,8 @@ async function executeBlenderRender() {
     aspect: camera.aspect || (1280 / 720)
   };
 
-  const cam = (viewMode === '3d' || viewMode === 'split') ? liveCam : (cameraPositions.find(c => c.id === selectedCamera) || cameraPositions[0] || liveCam);
+  const userSelectedPin = selectedCamera ? cameraPositions.find(c => c.id === selectedCamera) : null;
+  const cam = userSelectedPin || liveCam;
 
   // Switch to AI Render view
   setViewMode('ai');
