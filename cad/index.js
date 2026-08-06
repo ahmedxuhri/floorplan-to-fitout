@@ -2,6 +2,70 @@ import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 
+// ─── Custom UI Toast Notification System ──────────────────────────────────
+function showToast(message, type = 'info', duration = 4500) {
+  let container = document.getElementById('toast-container');
+  if (!container) {
+    container = document.createElement('div');
+    container.id = 'toast-container';
+    document.body.appendChild(container);
+  }
+
+  const icons = {
+    error: '❌',
+    warning: '⚠️',
+    success: '✅',
+    info: 'ℹ️'
+  };
+
+  const toast = document.createElement('div');
+  const toastType = ['error', 'warning', 'success', 'info'].includes(type) ? type : 'info';
+  toast.className = `custom-toast toast-${toastType}`;
+
+  const iconSpan = document.createElement('span');
+  iconSpan.className = 'toast-icon';
+  iconSpan.textContent = icons[toastType] || 'ℹ️';
+
+  const contentDiv = document.createElement('div');
+  contentDiv.className = 'toast-content';
+  contentDiv.textContent = String(message || '');
+
+  const closeBtn = document.createElement('button');
+  closeBtn.className = 'toast-close';
+  closeBtn.innerHTML = '&times;';
+  closeBtn.onclick = () => removeToast(toast);
+
+  toast.appendChild(iconSpan);
+  toast.appendChild(contentDiv);
+  toast.appendChild(closeBtn);
+
+  container.appendChild(toast);
+
+  const timer = setTimeout(() => removeToast(toast), duration);
+
+  function removeToast(t) {
+    clearTimeout(timer);
+    t.classList.add('toast-hiding');
+    setTimeout(() => {
+      if (t.parentNode) t.parentNode.removeChild(t);
+    }, 250);
+  }
+}
+
+// Override native browser alert to use custom UI toast
+window.alert = function(message) {
+  const msgStr = String(message || '');
+  let type = 'info';
+  if (msgStr.toLowerCase().includes('failed') || msgStr.toLowerCase().includes('error')) {
+    type = 'error';
+  } else if (msgStr.toLowerCase().includes('success') || msgStr.toLowerCase().includes('saved') || msgStr.toLowerCase().includes('restored')) {
+    type = 'success';
+  } else if (msgStr.toLowerCase().includes('first') || msgStr.toLowerCase().includes('please') || msgStr.toLowerCase().includes('draw')) {
+    type = 'warning';
+  }
+  showToast(msgStr, type);
+};
+
 // ─── State Variables ─────────────────────────────────────────────────────────
 let loadedBlenderGLB = null; // Stores high-fidelity glTF/GLB scene imported from Blender
 let corners = {};

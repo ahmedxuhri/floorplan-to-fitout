@@ -1135,6 +1135,8 @@ if is_3d and "px" in camera_data and "py" in camera_data and "pz" in camera_data
     bdz = camera_data.get("dy", 0.0)
 
     direction = mathutils.Vector((bdx, bdy, bdz))
+    if direction.length < 0.0001:
+        direction = mathutils.Vector((0.0, 1.0, 0.0))
     rot_quat = direction.to_track_quat('-Z', 'Y')
     cam.rotation_euler = rot_quat.to_euler()
 else:

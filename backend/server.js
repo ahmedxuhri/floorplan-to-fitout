@@ -75,6 +75,7 @@ function findNewestBrainDir(afterMs) {
 }
 
 const app = express();
+app.set('trust proxy', 1);
 const port = 3014;
 
 // CORS — only allow requests from our own domain + local dev
