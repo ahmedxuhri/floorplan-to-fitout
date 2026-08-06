@@ -91,6 +91,6 @@ The backend runs on port `3014` by default.
 
 ## License
 
-Source-Available (All Rights Reserved) — Copyright (c) 2026 Ahmed Xuhri.
+Source-Available (All Rights Reserved) — Copyright (c) 2026 Ahmed Xuhri (<ahmed@bigindexer.com>).
 
-This repository is source-available for viewing, educational, and evaluation purposes only. Commercial use, public redistribution, SaaS hosting, or creation of derivative works without prior written consent is strictly prohibited. See [LICENSE](LICENSE) for full terms.
+This repository is source-available for viewing, educational, and evaluation purposes only. Commercial use, public redistribution, SaaS hosting, or creation of derivative works without prior written consent is strictly prohibited. For commercial licensing inquiries, contact [ahmed@bigindexer.com](mailto:ahmed@bigindexer.com). See [LICENSE](LICENSE) for full terms.
