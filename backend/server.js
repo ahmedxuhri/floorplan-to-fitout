@@ -567,7 +567,7 @@ Response Schema (return raw JSON only, no markdown):
     // ── Security: Sanitize user message before it enters the AI prompt ──
     const sanitizedMessage = sanitizeChatMessage(message);
     if (!sanitizedMessage) {
-      console.warn(`[security] Chat message blocked for session ${sessionId}: "${String(message).substring(0, 120)}"`);
+      console.warn(`[security] Chat message blocked for session ${req.body.sessionId || 'unknown'}: "${String(message).substring(0, 120)}"`);
       return res.status(400).json({ error: 'Message contains restricted content. Please keep requests related to floor plan design and interior rendering.' });
     }
 
@@ -584,7 +584,7 @@ Response Schema (return raw JSON only, no markdown):
     const sessionId = req.body.sessionId || null;
     const conversationId = sessionId && sessions.has(sessionId) ? sessions.get(sessionId).conversationUUID : null;
     if (sessionId) sessionLog(sessionId, 'system', '💬 Processing chat message...');
-    const { code, stdout, stderr } = await runAgyCommand(agyPrompt, { sessionId, conversationId, logPrefix: 'chat' });
+    const { code, stdout, stderr } = await runAgyCommand(agyPrompt, { sessionId, conversationId, logPrefix: 'chat', spawnTimeout: 150000 });
 
     if (checkForQuotaError(stdout, stderr, conversationId)) {
       console.error('[chat] Quota/rate-limit error detected');
