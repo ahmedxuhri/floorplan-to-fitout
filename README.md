@@ -5,6 +5,7 @@ Convert a 2D architectural floor plan into a photorealistic interior render usin
 Upload a floor plan blueprint → AI traces walls, identifies objects, places cameras → generates a photorealistic 3D render.
 
 ![floorplan-to-fitout preview](assets/preview.png)
+![floorplan-to-fitout render preview](assets/preview2.png)
 
 ---
 
