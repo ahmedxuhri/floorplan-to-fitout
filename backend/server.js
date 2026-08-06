@@ -491,6 +491,23 @@ except Exception as e:
   });
 }
 
+function generateEdgeMap(inputPath) {
+  return new Promise((resolve) => {
+    if (!inputPath || !fs.existsSync(inputPath)) return resolve(null);
+    const outputPath = inputPath.replace(/\.(png|jpg|jpeg)$/i, '_edge.png');
+    const py = spawn('python3', [path.join(__dirname, 'generate_edge_map.py'), inputPath, outputPath]);
+    py.on('close', (code) => {
+      if (code === 0 && fs.existsSync(outputPath)) {
+        console.log(`[edge_map] LineArt edge mask generated: ${outputPath}`);
+        resolve(outputPath);
+      } else {
+        console.warn(`[edge_map] Python edge extraction failed with exit code ${code}`);
+        resolve(null);
+      }
+    });
+  });
+}
+
 // Wall Tracing Endpoint
 app.post('/trace', aiLimiter, upload.single('image'), async (req, res) => {
   let tempFilePath = null;
@@ -578,8 +595,10 @@ app.post('/chat', aiLimiter, async (req, res) => {
   let tempFilePath = null;
   let chatImageTempPath = null;
   let screenshot3DTempPath = null;
+  let depthImageTempPath = null;
+  let edgeMapTempPath = null;
   try {
-    const { message, floorplan, chatHistory, screenshot, chatImage, screenshot3d, objects } = req.body;
+    const { message, floorplan, chatHistory, screenshot, depthImage, chatImage, screenshot3d, objects } = req.body;
     const rawDesignBrief = req.body.designBrief || '';
     const designBrief = sanitizeInputField(rawDesignBrief, 'chat.designBrief');
 
@@ -587,6 +606,12 @@ app.post('/chat', aiLimiter, async (req, res) => {
       const base64Data = screenshot.split(',')[1] || screenshot;
       const buffer = Buffer.from(base64Data, 'base64');
       tempFilePath = await saveBufferToTempFile(buffer, 'screenshot_blender', 'image/png');
+    }
+
+    if (depthImage) {
+      const base64Data = depthImage.split(',')[1] || depthImage;
+      const buffer = Buffer.from(base64Data, 'base64');
+      depthImageTempPath = await saveBufferToTempFile(buffer, 'depth_mask', 'image/png');
     }
 
     if (chatImage) {
@@ -599,6 +624,12 @@ app.post('/chat', aiLimiter, async (req, res) => {
       const base64Data = screenshot3d.split(',')[1] || screenshot3d;
       const buffer = Buffer.from(base64Data, 'base64');
       screenshot3DTempPath = await saveBufferToTempFile(buffer, 'screenshot_threejs', 'image/png');
+    }
+
+    // Generate LineArt Edge Mask from color screenshot for Phase 3 geometry locking
+    const primaryRender = tempFilePath || screenshot3DTempPath;
+    if (primaryRender) {
+      edgeMapTempPath = await generateEdgeMap(primaryRender);
     }
 
     let contextPrompt = `
@@ -615,6 +646,7 @@ FLOORPLAN EDITING: If the user asks to modify the layout (add/delete/move walls,
 
 Renders/Reference Images provided (these are the ONLY files you are permitted to access):
 - Blender Render Image: ${tempFilePath ? `[reference image A — at path: "${tempFilePath}"]` : 'Not provided'}. Primary spatial layout, depth, lighting, and perspective reference.
+- Blender Depth Mask: ${depthImageTempPath ? `[reference image D — at path: "${depthImageTempPath}"]` : 'Not provided'}. Provides 16-bit geometric depth bounds.
 - 2D Floor Plan layout with numbered circles: ${chatImageTempPath ? `[reference image B — at path: "${chatImageTempPath}"]` : 'Not provided'}. Shows item numbers, bounds, walls, and camera direction pins.
 - Three.js 3D Viewport screenshot: ${screenshot3DTempPath ? `[reference image C — at path: "${screenshot3DTempPath}"]` : 'Not provided'}. Shows overall room layout, shapes, and color schemes.
 
@@ -635,6 +667,7 @@ CRITICAL RULES FOR "imagePrompt":
 5. If design brief was provided, ensure the style matches it.
 6. Map all object descriptions directly to screen-space coordinates of the provided Blender render.
 7. If an object is not in the Blender render frame because it is behind the camera, do not mention or place it in the imagePrompt.
+8. STRICT GEOMETRY & NEGATIVE CONSTRAINTS: Explicitly append structural negative constraints to the imagePrompt: "Strict 1:1 geometry match. Negative constraints: no extra doors, no extra wall openings, no non-existent side panels, no altered wall angles, no modified room boundaries, no floating panels, no cutaway walls."
 
 Response Schema (return raw JSON only, no markdown):
 {
@@ -687,17 +720,19 @@ Response Schema (return raw JSON only, no markdown):
       try {
         let refImages = [];
         if (tempFilePath) refImages.push(tempFilePath);
+        if (depthImageTempPath) refImages.push(depthImageTempPath);
+        if (edgeMapTempPath) refImages.push(edgeMapTempPath);
         if (chatImageTempPath) refImages.push(chatImageTempPath);
         if (screenshot3DTempPath) refImages.push(screenshot3DTempPath);
 
         let refImageText = '';
         if (refImages.length > 0) {
           const pathList = refImages.map(p => `"${p}"`).join(', ');
-          refImageText = `You MUST pass the reference image paths: [${pathList}] in the ImagePaths parameter of the generate_image tool. The layout/depth image "${tempFilePath}" preserves the exact room proportions and camera perspective. The 2D plan layout is at "${chatImageTempPath}". ${screenshot3DTempPath ? `The third image at "${screenshot3DTempPath}" is either a previous AI render of the same room (for style consistency) or a 3D viewport reference — use it to match materials, colors, lighting mood, and furniture styles exactly.` : ''} Use these reference images to analyze colors, layouts, materials, and spatial positioning.`;
+          refImageText = `You MUST pass the reference image paths: [${pathList}] in the ImagePaths parameter of the generate_image tool. The layout image "${tempFilePath}" preserves room proportions and camera perspective. ${depthImageTempPath ? `The depth mask image "${depthImageTempPath}" provides 16-bit depth boundaries — do NOT alter wall depths.` : ''} ${edgeMapTempPath ? `The LineArt edge mask "${edgeMapTempPath}" locks exact wall outlines and door frame contours — do NOT draw extra openings.` : ''} The 2D plan layout is at "${chatImageTempPath}". Use these reference images to strictly anchor colors, layouts, materials, and spatial positioning.`;
         }
 
         const imageAgyPrompt = `Generate a photorealistic 3D render using the generate_image tool.
-Use this text prompt: "${chatData.imagePrompt}".
+Use this text prompt: "${chatData.imagePrompt}. Strict 1:1 architectural accuracy. Negative constraints: no extra doors, no extra wall openings, no altered wall angles, no non-existent side panels, no structural modifications."
 ${refImageText}
 Return ONLY the markdown link to the generated image file, do not include any other text.`;
         const imageResult = await runAgyCommand(imageAgyPrompt, { sessionId, conversationId, logPrefix: 'chat-imagen' });
@@ -736,6 +771,12 @@ Return ONLY the markdown link to the generated image file, do not include any ot
     }
     if (screenshot3DTempPath && fs.existsSync(screenshot3DTempPath)) {
       try { fs.unlinkSync(screenshot3DTempPath); } catch (e) { console.error("Failed to delete temp screenshot3d file:", e); }
+    }
+    if (depthImageTempPath && fs.existsSync(depthImageTempPath)) {
+      try { fs.unlinkSync(depthImageTempPath); } catch (e) { console.error("Failed to delete temp depth file:", e); }
+    }
+    if (edgeMapTempPath && fs.existsSync(edgeMapTempPath)) {
+      try { fs.unlinkSync(edgeMapTempPath); } catch (e) { console.error("Failed to delete temp edge map file:", e); }
     }
   }
 });
@@ -1776,6 +1817,8 @@ Your task is to verify and refine this description. Ensure that:
      - The chairs/seating must match commercial usability. Specify commercial-grade seating suitable for a public dining space, such as "sturdy low-back restaurant bar stools with footrests made of black steel and dark oak wood at the counter" or "sleek modern cafe dining chairs that align correctly with the counter and table height". Do NOT place domestic/cozy residential armchairs, desk chairs, or basic stools.
      - The tables, countertops, and floor materials must match a high-durability public space (e.g. polished concrete, industrial hardwood planks, luxury terrazzo).
 
+7. STRICT GEOMETRY LOCKING & NEGATIVE CONSTRAINTS: In the imagenPrompt, explicitly specify that the layout geometry, wall positions, door positions, and camera perspective are strictly 1:1 aligned with the 3D viewport. End the prompt with strict negative constraints: "Strict 1:1 geometry match. Negative constraints: no extra doors, no extra wall openings, no non-existent side panels, no unexpected alcoves, no modified wall angles, no altered room boundaries, flush continuous walls only."
+
 ${designBrief ? `Apply the style, materials and mood specified in this design brief:\n"${designBrief}"\n` : ''}
 
 Output a refined JSON object matching this schema (do NOT include other text or explanations):
@@ -1825,7 +1868,7 @@ app.post('/blind-render/stage3', aiLimiter, async (req, res) => {
     }
 
     const stage3Prompt = `Generate a photorealistic 3D render using the generate_image tool.
-Use this text prompt: "${stage2Json.imagenPrompt}".
+Use this text prompt: "${stage2Json.imagenPrompt}. Strict 1:1 spatial geometry match. Negative constraints: no extra doors, no extra wall openings, no non-existent side panels, no altered wall angles, no modified room boundaries."
 Do NOT pass any reference image paths in the ImagePaths parameter. The image must be generated blindly based ONLY on the text prompt.
 Return ONLY the markdown link to the generated image file, do not include any other text.`;
 

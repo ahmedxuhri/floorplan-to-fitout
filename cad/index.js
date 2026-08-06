@@ -2841,10 +2841,11 @@ CRITICAL POSITIONING RULE: You must map all descriptions of objects and furnitur
           shape: o.shape || 'rectangle'
         })),
         chatHistory: [],
-        screenshot:  lastBlenderRender, // Blender render
-        chatImage:   screenshot2d,      // 2D floor plan with numbers
+        screenshot:   lastBlenderRender, // Blender render
+        depthImage:   lastDepthMap,      // 3D Depth Map from Blender
+        chatImage:    screenshot2d,      // 2D floor plan with numbers
         screenshot3d: screenshot3d,      // 3D interactive viewport screenshot
-        sessionId:   sessionId
+        sessionId:    sessionId
       })
     });
 
