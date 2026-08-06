@@ -91,4 +91,6 @@ The backend runs on port `3014` by default.
 
 ## License
 
-MIT
+Source-Available (All Rights Reserved) — Copyright (c) 2026 Ahmed Xuhri.
+
+This repository is source-available for viewing, educational, and evaluation purposes only. Commercial use, public redistribution, SaaS hosting, or creation of derivative works without prior written consent is strictly prohibited. See [LICENSE](LICENSE) for full terms.
