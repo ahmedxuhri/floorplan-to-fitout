@@ -2675,7 +2675,7 @@ async function executeBlenderRender() {
     aspect: camera.aspect || (1280 / 720)
   };
 
-  const cam = (currentViewMode === '3d' || currentViewMode === 'split') ? liveCam : (cameraPositions.find(c => c.id === selectedCamera) || cameraPositions[0] || liveCam);
+  const cam = (viewMode === '3d' || viewMode === 'split') ? liveCam : (cameraPositions.find(c => c.id === selectedCamera) || cameraPositions[0] || liveCam);
 
   // Switch to AI Render view
   setViewMode('ai');
@@ -2948,7 +2948,7 @@ async function runBlindAIRender() {
     aspect: camera.aspect || (1280 / 720)
   };
 
-  const cam = (currentViewMode === '3d' || currentViewMode === 'split') ? liveCam : (cameraPositions.find(c => c.id === selectedCamera) || cameraPositions[0] || liveCam);
+  const cam = (viewMode === '3d' || viewMode === 'split') ? liveCam : (cameraPositions.find(c => c.id === selectedCamera) || cameraPositions[0] || liveCam);
   const designBrief = cadDesignBrief ? cadDesignBrief.value.trim() : '';
 
   try {
