@@ -1283,7 +1283,7 @@ app.post('/blender-render', async (req, res) => {
       '--background',
       '--python', BLENDER_SCRIPT,
       '--', sceneJson
-    ], { timeout: 60000 });
+    ], { timeout: 120000 });
 
     let stdout = '';
     let stderr = '';
@@ -1563,8 +1563,10 @@ ${aiPythonCode}
 # ─── Render Execution ───
 scene.render.engine                     = 'CYCLES'
 scene.cycles.device                     = 'CPU'
-scene.cycles.samples                    = 16
+scene.cycles.samples                    = 8
 scene.cycles.use_denoising             = True
+scene.render.tile_x                     = 256
+scene.render.tile_y                     = 256
 scene.render.resolution_x               = 1280
 scene.render.resolution_y               = 720
 scene.render.resolution_percentage      = 100
@@ -1645,7 +1647,7 @@ print("[blender_scene] Done.")
       '--background',
       '--python', tempScriptPath,
       '--', sceneJson
-    ], { timeout: 60000 });
+    ], { timeout: 120000 });
 
     let blenderStdout = '';
     let blenderStderr = '';
