@@ -190,7 +190,7 @@ function sanitizeChatMessage(message) {
   // Normalize unicode to catch fullwidth lookalikes
   const normalized = message.normalize('NFKC');
   const msg = normalized.trim();
-  if (msg.length > 4000) return null; // prevent prompt stuffing
+  if (msg.length > 25000) return null; // prevent prompt stuffing / buffer attacks
   for (const pattern of INJECTION_PATTERNS) {
     if (pattern.test(msg)) {
       console.warn(`[security] Blocked injection attempt: "${msg.substring(0, 120)}"`);
