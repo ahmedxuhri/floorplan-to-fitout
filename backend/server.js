@@ -5,12 +5,14 @@ const multer = require('multer');
 const { spawn } = require('child_process');
 const fs = require('fs');
 const path = require('path');
+const os = require('os');
 const crypto = require('crypto');
 
 const BLENDER_BIN = process.env.BLENDER_BIN || 'blender';
 const BLENDER_SCRIPT = path.join(__dirname, 'blender_scene.py');
-const TMP_DIR = '/tmp';
-const AGY_BRAIN_DIR = '/root/.gemini/antigravity-cli/brain';
+const TMP_DIR = process.env.TMP_DIR || os.tmpdir() || '/tmp';
+const AGY_BIN = process.env.AGY_BIN || path.join(process.env.HOME || '/root', '.local/bin/agy');
+const AGY_BRAIN_DIR = process.env.AGY_BRAIN_DIR || path.join(process.env.HOME || '/root', '.gemini/antigravity-cli/brain');
 // Simple queue: one Blender job at a time
 let blenderBusy = false;
 
@@ -240,8 +242,8 @@ function runAgyCommand(promptText, options = {}) {
     console.log(`[${logPrefix}] Spawning agy CLI, prompt length: ${securedPrompt.length}${conversationId ? `, conv: ${conversationId}` : ''}, timeout: ${spawnTimeout}ms`);
     if (sessionId) sessionLog(sessionId, 'system', `⚙️ Spawning AI agent...`);
 
-    const child = spawn('/root/.local/bin/agy', args, {
-      cwd: '/tmp',
+    const child = spawn(AGY_BIN, args, {
+      cwd: TMP_DIR,
       env: process.env,
       stdio: ['ignore', 'pipe', 'pipe'],
       timeout: spawnTimeout
