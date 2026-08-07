@@ -2598,9 +2598,7 @@ async function runBlenderAIPreview() {
       blenderPreviewImg.src = data.imageUrl;
       blenderPreviewImg.style.display = 'block';
       if (blenderPreviewPlaceholder) blenderPreviewPlaceholder.style.display = 'none';
-      if (data.glbUrl) {
-        loadBlenderGLB(data.glbUrl);
-      }
+      clearLoadedGLB(); // Ensure native Three.js 3D viewport remains pristine
       showPipelineStatus('✓ 3D Preview layout generated successfully!');
       setTimeout(hidePipelineStatus, 4000);
     } else {
@@ -2846,9 +2844,7 @@ async function executeBlenderRender() {
     const blenderData = await blenderRes.json();
     lastBlenderRender = blenderData.imageUrl;
     lastDepthMap = blenderData.depthUrl || null; // Store depth map from Blender
-    if (blenderData.glbUrl) {
-      loadBlenderGLB(blenderData.glbUrl);
-    }
+    clearLoadedGLB(); // Ensure Three.js 3D viewport remains 100% intact with pristine native walls
 
     nextStage(); // move to Imagen stage
 
